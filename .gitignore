@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+argus.db
+.venv/
+data/raw/*.csv
+data/processed/*.csv
+app/ml/artifacts/*.joblib
