@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
     APP_NAME: str = "ARGUS API"
     ENVIRONMENT: str = "development"
@@ -13,7 +14,12 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        return [item.strip() for item in self.BACKEND_CORS_ORIGINS.split(",") if item.strip()]
+        return [
+            item.strip()
+            for item in self.BACKEND_CORS_ORIGINS.split(",")
+            if item.strip()
+        ]
+
 
 @lru_cache
 def get_settings() -> Settings:
