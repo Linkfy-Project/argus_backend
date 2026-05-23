@@ -12,3 +12,6 @@ dados_macae/
 
 *.csv
 *.xlsx
+/venv
+plano_geo_sync.md
+relatório pesquisa geobr - biblioteca python IPEA.md

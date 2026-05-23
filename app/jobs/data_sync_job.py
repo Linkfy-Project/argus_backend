@@ -5,6 +5,7 @@ from app.db.session import SessionLocal
 from app.etl.tcerj_client import extract_tcerj
 from app.etl.macae_portal import update_macae_portal
 from app.etl.importer import import_csv
+from app.etl.geo_sync import sync_geo_layers
 
 
 def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> dict:
@@ -15,7 +16,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
     1. Extrai dados do TCE-RJ.
     2. Extrai dados do Portal de Macaé.
     3. Importa CSVs disponíveis.
-    4. Popula/atualiza o banco para consumo pelo dashboard.
+    4. Sincroniza camadas geoespaciais (município, setores, malha viária).
     """
 
     started_at = datetime.now()
@@ -141,6 +142,21 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
 
         finally:
             db.close()
+
+    # ── Step 4: Camadas geoespaciais ──
+    try:
+        geo_result = sync_geo_layers()
+        result["steps"].append({
+            "step": "sync_geo_layers",
+            "status": "ok",
+            "result": geo_result,
+        })
+    except Exception as exc:
+        result["steps"].append({
+            "step": "sync_geo_layers",
+            "status": "error",
+            "error": str(exc),
+        })
 
     result["status"] = "finished"
     result["total_created"] = total_created
