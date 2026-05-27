@@ -25,6 +25,12 @@ class PublicWork(Base):
     paid_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     additive_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     area_m2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    benchmark_cost_m2: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    crea_light_count: Mapped[int] = mapped_column(Integer, default=0)
+    crea_medium_count: Mapped[int] = mapped_column(Integer, default=0)
+    crea_grave_count: Mapped[int] = mapped_column(Integer, default=0)
+    territorial_overlap_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     signed_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     due_at: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -59,6 +65,9 @@ class Alert(Base):
     work_id: Mapped[int] = mapped_column(ForeignKey("public_works.id"), index=True)
     code: Mapped[str] = mapped_column(String(80), index=True)
     severity: Mapped[str] = mapped_column(String(20), index=True)
+    severity_weight: Mapped[float] = mapped_column(Float, default=0.0)
+    severity_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
+    weighted_severity: Mapped[float] = mapped_column(Float, default=0.0)
     message: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

@@ -121,7 +121,36 @@ def clean_date(value) -> date | None:
     if isinstance(value, date):
         return value
 
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            number = float(value)
+            if number > 10**11:
+                parsed = pd.to_datetime(number, unit="ms", errors="coerce")
+            elif number > 10**9:
+                parsed = pd.to_datetime(number, unit="s", errors="coerce")
+            else:
+                parsed = pd.to_datetime(number, errors="coerce", dayfirst=True)
+            if pd.isna(parsed):
+                return None
+            return parsed.date()
+        except Exception:
+            return None
+
     text = str(value).strip()
+
+    if re.fullmatch(r"\d+(\.0)?", text):
+        try:
+            number = float(text)
+            if number > 10**11:
+                parsed = pd.to_datetime(number, unit="ms", errors="coerce")
+                if not pd.isna(parsed):
+                    return parsed.date()
+            elif number > 10**9:
+                parsed = pd.to_datetime(number, unit="s", errors="coerce")
+                if not pd.isna(parsed):
+                    return parsed.date()
+        except Exception:
+            pass
 
     if text == "":
         return None
@@ -166,7 +195,7 @@ def read_csv_flexible(path: Path) -> pd.DataFrame:
             low_memory=False,
         )
 
-    df.columns = [str(col).strip() for col in df.columns]
+    df.columns = [str(col).replace("\ufeff", "").strip() for col in df.columns]
 
     return df
 
@@ -355,6 +384,9 @@ def row_to_payload(row: dict, default_municipio: str = "Macae") -> dict:
                     "Valor Contrato",
                     "Valor",
                     "nrvalor",
+                    "ValorEstimado",
+                    "Valor Estimado",
+                    "ValorTotalContrato",
                     "valor_original",
                     "valor",
                 ],
@@ -370,10 +402,19 @@ def row_to_payload(row: dict, default_municipio: str = "Macae") -> dict:
             first_present(row, ["ValorPago", "Valor Pago", "valor_pago"])
         ),
         "additive_value": clean_float(
-            first_present(row, ["Aditivo", "ValorAditivo", "Valor Aditivo", "valor_aditivo"])
+            first_present(row, ["Aditivo", "ValorAditivo", "Valor Aditivo", "valor_aditivo", "ValorFinalAditivado", "valor_final_aditivado"])
         ),
         "area_m2": clean_float(
-            first_present(row, ["area_m2", "Área", "Area", "area", "metragem"])
+            first_present(row, ["area_m2", "Área", "Area", "area", "metragem", "metragem_m2"])
+        ),
+        "benchmark_cost_m2": clean_float(
+            first_present(row, ["benchmark_cost_m2", "SINAPI_m2", "sinapi_m2", "custo_referencia_m2", "CustoReferenciaM2"])
+        ),
+        "crea_light_count": int(clean_float(first_present(row, ["crea_light_count", "infracoes_crea_leves", "CREA_Leve"])) or 0),
+        "crea_medium_count": int(clean_float(first_present(row, ["crea_medium_count", "infracoes_crea_medias", "CREA_Media"])) or 0),
+        "crea_grave_count": int(clean_float(first_present(row, ["crea_grave_count", "infracoes_crea_graves", "CREA_Grave", "embargos_crea"])) or 0),
+        "territorial_overlap_ratio": clean_float(
+            first_present(row, ["territorial_overlap_ratio", "overlap_ratio", "recorrencia_territorial_ratio", "sobreposicao_ratio"])
         ),
         "signed_at": clean_date(
             first_present(
@@ -382,9 +423,14 @@ def row_to_payload(row: dict, default_municipio: str = "Macae") -> dict:
                     "DataAssinaturaContrato",
                     "Data Assinatura Contrato",
                     "DataAssinatura",
+                    "DataInicioObra",
+                    "DataPublicacaoEdital",
+                    "DataHomologacao",
                     "dtlicitacao",
                     "data_assinatura",
                     "Data",
+                    "Início",
+                    "Inicio",
                 ],
             )
         ),
@@ -398,6 +444,8 @@ def row_to_payload(row: dict, default_municipio: str = "Macae") -> dict:
                     "data_vencimento",
                     "Vigência",
                     "Vigencia",
+                    "Fim",
+                    "DataUltimaAtualizacao",
                 ],
             )
         ),
@@ -413,7 +461,7 @@ def row_to_payload(row: dict, default_municipio: str = "Macae") -> dict:
             )
         ),
         "status": clean_str(
-            first_present(row, ["status", "Status", "Situacao", "Situação"])
+            first_present(row, ["status", "Status", "Situacao", "Situação", "StatusContrato", "TipoParalisacao"])
         ),
         "address": clean_str(
             first_present(row, ["Endereco", "Endereço", "address", "logradouro"])
