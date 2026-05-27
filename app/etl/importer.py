@@ -4,12 +4,16 @@ from datetime import date, datetime
 from pathlib import Path
 import math
 import re
+import warnings
 
 import pandas as pd
 from sqlalchemy.orm import Session
 
+# Suprime warnings repetitivos de parse de datas (dayfirst vs formato %Y-%m-%d)
+warnings.filterwarnings("ignore", message="Parsing dates in.*dayfirst.*")
+
 from app.models.work import PublicWork
-from app.services.work_service import recompute_work
+from app.services.work_service import recompute_many
 from app.utils.parsing import first_present
 
 
@@ -538,6 +542,11 @@ def import_csv(
 ) -> dict:
     """
     Importa CSV para o banco com limpeza de NaN/NaT e proteção contra duplicidade.
+
+    Otimização de performance:
+    - Fase 1: Faz apenas db.flush() por linha (sem sync em disco) + um único db.commit()
+    - Fase 2: Recalcula scores em lote separado (recompute_work lida com seus próprios commits)
+    Isso reduz drasticamente o tempo de importação no SQLite.
     """
 
     p = Path(path)
@@ -551,6 +560,11 @@ def import_csv(
     updated_ids: list[int] = []
     errors: list[dict] = []
 
+    total_linhas = len(df)
+
+    DEBUG: str | None = None  # flag para depuração
+
+    # ── Fase 1: Upsert em lote (apenas flush, commit único no final) ──
     for index, record in df.iterrows():
         row_number = int(index) + 2
 
@@ -570,16 +584,13 @@ def import_csv(
 
             work, created = upsert_work(db, payload)
 
-            db.commit()
-            db.refresh(work)
+            # db.flush() popula o work.id sem forçar sync em disco
+            db.flush()
 
             if created:
                 created_ids.append(work.id)
             else:
                 updated_ids.append(work.id)
-
-            if recompute:
-                recompute_work(db, work.id)
 
         except Exception as exc:
             db.rollback()
@@ -591,6 +602,27 @@ def import_csv(
                     "error": str(exc),
                 }
             )
+
+    # Commit único de todas as linhas
+    db.commit()
+
+    print(
+        f"DEBUG: [IMPORT] Upsert concluído: {len(created_ids)} criados, "
+        f"{len(updated_ids)} atualizados, {len([e for e in errors if e.get('status') == 'error'])} erros, "
+        f"{len([e for e in errors if e.get('status') == 'skipped'])} pulados em {total_linhas} linhas."
+    )
+
+    # ── Fase 2: Recalcular scores em BATCH otimizado ──
+    if recompute:
+        todos_ids = created_ids + updated_ids
+        total_recompute = len(todos_ids)
+        print(f"DEBUG: [IMPORT] Recalculando scores de {total_recompute} obras em batch...")
+
+        try:
+            result = recompute_many(db, todos_ids)
+            print(f"DEBUG: [IMPORT] Recompute batch concluído: {result['updated']} obras processadas.")
+        except Exception as exc:
+            print(f"DEBUG: [IMPORT]   Erro no recompute batch: {exc}")
 
     return {
         "path": str(p),

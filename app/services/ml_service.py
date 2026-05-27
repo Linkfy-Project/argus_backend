@@ -12,6 +12,9 @@ FEATURES = [
     "area_m2", "delay_days", "contractor_recurrence", "idh",
 ]
 
+# Cache global do modelo carregado (evita joblib.load() em cada predict)
+_model_cache = None
+
 
 def _baseline_dataset():
     # Dataset sintético inicial para PoC. Substituir por dados rotulados reais na Fase 2.
@@ -50,9 +53,25 @@ def train_baseline_model():
 
 
 def load_model():
+    """Carrega o modelo do disco SEM cache (útil quando o modelo é re-treinado)."""
     if MODEL_PATH.exists():
         return joblib.load(MODEL_PATH)
     return train_baseline_model()
+
+
+def get_cached_model():
+    """Retorna o modelo em cache. Carrega do disco apenas na primeira chamada."""
+    global _model_cache
+    if _model_cache is None:
+        print("DEBUG: [ML] Carregando modelo pela primeira vez (cache).")
+        _model_cache = load_model()
+    return _model_cache
+
+
+def invalidate_model_cache():
+    """Invalida o cache para forçar recarga na próxima chamada (após re-treino)."""
+    global _model_cache
+    _model_cache = None
 
 
 def predict_risks(features: dict) -> dict:
@@ -75,3 +94,53 @@ def predict_risks(features: dict) -> dict:
         "rework_probability": round(proba("rework"), 4),
         "model_version": models.get("version", "unknown"),
     }
+
+
+def predict_risks_batch(features_list: list[dict], models: dict | None = None) -> list[dict]:
+    """
+    Prediz riscos para MULTIPLAS obras DE UMA VEZ usando o modelo em cache.
+
+    Args:
+        features_list: Lista de dicionários com as features de cada obra.
+        models: Modelo pré-carregado (se None, usa o cache global).
+
+    Retorna:
+        Lista de dicts com delay_probability, cost_overrun_probability,
+        rework_probability, model_version.
+    """
+    if models is None:
+        models = get_cached_model()
+
+    if not features_list:
+        return []
+
+    # Monta matriz X 2D com TODAS as linhas de uma vez
+    # Shape: (N_obras, N_features)
+    X = np.array(
+        [
+            [0.0 if feats.get(name) is None else float(feats[name]) for name in FEATURES]
+            for feats in features_list
+        ],
+        dtype=np.float64,
+    )
+
+    model_version = models.get("version", "unknown")
+    n_obras = X.shape[0]
+
+    # predict_proba em lote: retorna array shape (N_obras, 2)
+    # A coluna [:, 1] é a probabilidade da classe positiva (risco)
+    delay_probas = models["delay"].predict_proba(X)[:, 1]
+    cost_probas = models["cost"].predict_proba(X)[:, 1]
+    rework_probas = models["rework"].predict_proba(X)[:, 1]
+
+    # Monta resultado como lista de dicts
+    results = []
+    for i in range(n_obras):
+        results.append({
+            "delay_probability": round(float(delay_probas[i]), 4),
+            "cost_overrun_probability": round(float(cost_probas[i]), 4),
+            "rework_probability": round(float(rework_probas[i]), 4),
+            "model_version": model_version,
+        })
+
+    return results

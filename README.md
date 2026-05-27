@@ -2,6 +2,10 @@
 
 Backend da plataforma ARGUS para análise de eficiência, risco e integridade de obras públicas municipais, com foco inicial em Macaé-RJ.
 
+URL do backend(render): https://argus-backend-5bio.onrender.com
+
+Documentação do Render: https://argus-backend-5bio.onrender.com/docs#/
+
 ## O que foi ajustado nesta versão
 
 - Regras do **Índice de Eficiência Composta ARGUS (IEC)** consolidadas em `app/services/scoring.py`.
@@ -33,6 +37,14 @@ Backend da plataforma ARGUS para análise de eficiência, risco e integridade de
 - Novas rotas de auditoria do score:
   - `GET /api/v1/works/scoring/rules`
   - `GET /api/v1/works/{work_id}/score-explain`
+- Módulo de Machine Learning com modelo baseline para predição de riscos:
+  - `POST /api/v1/ml/predict` — predição de probabilidade de atraso, estouro de custo e retrabalho
+  - `POST /api/v1/ml/train-baseline` — re-treino do modelo baseline
+- Exportação de dados:
+  - `GET /api/v1/exports/works.csv` — exportar obras em CSV
+  - `GET /api/v1/exports/works.xlsx` — exportar obras em Excel
+- Camadas geoespaciais:
+  - `GET /api/v1/geo-layers/{layer_type}` — FeatureCollection GeoJSON por tipo de camada (`municipality`, `census_tract`, `road`)
 
 ## Como rodar localmente
 
@@ -66,17 +78,52 @@ docker compose up --build
 
 Pelo Swagger ou por requisição HTTP:
 
+### Sincronização completa (TCE-RJ + Portal Macaé + Importação + Recálculo)
+
 ```bash
 curl -X POST "http://localhost:8000/api/v1/etl/sync-public-data?municipio=Macae"
 ```
 
-Importar manualmente um CSV local:
+Parâmetros opcionais:
+
+| Parâmetro | Tipo | Padrão | Descrição |
+|---|---|---|---|
+| `municipio` | string | `Macae` | Município usado na sincronização automática |
+| `ano` | integer | (vazio) | Ano de referência. Se vazio, busca sem filtro de ano. |
+
+### Extração apenas do TCE-RJ
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/etl/tcerj/run?municipio=Macae&ano=2025"
+```
+
+Parâmetros opcionais:
+
+| Parâmetro | Tipo | Padrão | Descrição |
+|---|---|---|---|
+| `municipio` | string | `Macae` | Município usado na extração do TCE-RJ |
+| `ano` | integer | (vazio) | Ano de referência. Se vazio, busca sem filtro de ano. |
+
+### Extração apenas do Portal da Transparência de Macaé
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/etl/macae-portal/run"
+```
+
+### Importar manualmente um CSV local
 
 ```bash
 curl -X POST "http://localhost:8000/api/v1/etl/import-csv?path=data/raw/tcerj/obras_consolidado.csv&municipio=Macae"
 ```
 
-Consultar status da atualização automática:
+Parâmetros:
+
+| Parâmetro | Tipo | Padrão | Descrição |
+|---|---|---|---|
+| `path` | string | (obrigatório) | Caminho local do CSV no backend |
+| `municipio` | string | `Macae` | Município padrão caso o CSV não tenha município |
+
+### Consultar status da atualização automática
 
 ```bash
 curl "http://localhost:8000/api/v1/etl/sync-status"
@@ -86,16 +133,48 @@ O scheduler interno roda uma sincronização ao iniciar a API e depois repete o 
 
 ## Rotas principais para teste
 
-Health check:
+### Health check
 
 ```bash
 curl "http://localhost:8000/health"
 ```
 
+### Obras (Works)
+
 Listar obras:
 
 ```bash
-curl "http://localhost:8000/api/v1/works?municipio=Macae&limit=20"
+curl "http://localhost:8000/api/v1/works?municipio=Macae&limit=20&min_score=50&max_score=100"
+```
+
+Parâmetros opcionais:
+
+| Parâmetro | Tipo | Padrão | Descrição |
+|---|---|---|---|
+| `municipio` | string | — | Filtrar por município |
+| `min_score` | number | — | Score mínimo (eficiência) |
+| `max_score` | number | — | Score máximo (eficiência) |
+| `limit` | integer | `100` | Limite de resultados (máx. 500) |
+| `offset` | integer | `0` | Offset para paginação |
+
+Criar obra:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/works" \
+  -H "Content-Type: application/json" \
+  -d '{"source": "manual", "municipio": "Macae", "object_description": "Pavimentação Rua X", "contract_value": 150000.00}'
+```
+
+Obter obra por ID:
+
+```bash
+curl "http://localhost:8000/api/v1/works/1"
+```
+
+Recalcular score de uma obra específica:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/works/1/recompute"
 ```
 
 Recalcular todos os scores:
@@ -116,10 +195,18 @@ Auditar a memória de cálculo de uma obra:
 curl "http://localhost:8000/api/v1/works/1/score-explain"
 ```
 
+### Analytics
+
 Resumo analítico:
 
 ```bash
 curl "http://localhost:8000/api/v1/analytics/summary?municipio=Macae"
+```
+
+Rankings de obras:
+
+```bash
+curl "http://localhost:8000/api/v1/analytics/rankings?limit=10"
 ```
 
 GeoJSON para mapa:
@@ -127,6 +214,49 @@ GeoJSON para mapa:
 ```bash
 curl "http://localhost:8000/api/v1/analytics/map/geojson"
 ```
+
+### Machine Learning
+
+Predição de riscos (atraso, estouro de custo, retrabalho):
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/ml/predict" \
+  -H "Content-Type: application/json" \
+  -d '{"contract_value": 500000.0, "committed_value": 480000.0, "settled_value": 200000.0, "area_m2": 1200.0, "crea_light_count": 1, "crea_medium_count": 0, "crea_grave_count": 0, "delay_days": 30}'
+```
+
+Treinar/re-treinar modelo baseline:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/ml/train-baseline"
+```
+
+### Exportações
+
+Exportar obras em CSV:
+
+```bash
+curl "http://localhost:8000/api/v1/exports/works.csv"
+```
+
+Exportar obras em Excel:
+
+```bash
+curl "http://localhost:8000/api/v1/exports/works.xlsx"
+```
+
+### Camadas Geoespaciais
+
+Obter camada GeoJSON por tipo:
+
+```bash
+curl "http://localhost:8000/api/v1/geo-layers/{layer_type}"
+```
+
+Tipos disponíveis (`layer_type`):
+- `municipality` — malha municipal
+- `census_tract` — setores censitários
+- `road` — malha viária
 
 ## Bases usadas ou consideradas
 
