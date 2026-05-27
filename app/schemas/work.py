@@ -19,6 +19,11 @@ class WorkBase(BaseModel):
     paid_value: float | None = None
     additive_value: float | None = None
     area_m2: float | None = None
+    benchmark_cost_m2: float | None = None
+    crea_light_count: int = 0
+    crea_medium_count: int = 0
+    crea_grave_count: int = 0
+    territorial_overlap_ratio: float | None = None
     signed_at: date | None = None
     due_at: date | None = None
     finished_at: date | None = None
@@ -39,6 +44,9 @@ class AlertRead(BaseModel):
     id: int
     code: str
     severity: str
+    severity_weight: float = 0.0
+    severity_multiplier: float = 1.0
+    weighted_severity: float = 0.0
     message: str
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
@@ -59,12 +67,27 @@ class WorkRead(WorkBase):
     alerts: list[AlertRead] = []
     model_config = ConfigDict(from_attributes=True)
 
+class ScoreDetails(BaseModel):
+    efficiency_score: float
+    components: dict
+    alerts: list[dict]
+
+class ScoringRules(BaseModel):
+    weights: dict
+    formulas: dict
+    triggers: dict
+
 class PredictionInput(BaseModel):
     contract_value: float | None = None
     committed_value: float | None = None
     settled_value: float | None = None
     additive_value: float | None = None
     area_m2: float | None = None
+    benchmark_cost_m2: float | None = None
+    crea_light_count: int = 0
+    crea_medium_count: int = 0
+    crea_grave_count: int = 0
+    territorial_overlap_ratio: float | None = None
     delay_days: int | None = None
     contractor_recurrence: int | None = None
     idh: float | None = None

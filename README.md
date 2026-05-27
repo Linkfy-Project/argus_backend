@@ -1,95 +1,144 @@
-# ARGUS Backend — FastAPI
+# ARGUS Backend - FastAPI
 
-Backend em FastAPI para o sistema **ARGUS**, plataforma de inteligência para eficiência de obras públicas municipais no RJ, com foco inicial em Macaé.
+Backend da plataforma ARGUS para análise de eficiência, risco e integridade de obras públicas municipais, com foco inicial em Macaé-RJ.
 
-## O que este backend entrega
+## O que foi ajustado nesta versão
 
-- API REST para obras públicas, indicadores, rankings e mapa GeoJSON.
-- Ingestão de dados do TCE-RJ e Portal da Transparência de Macaé.
-- Importação de CSVs gerados por crawlers ou planilhas de validação.
-- Cálculo do Índice de Eficiência Composta ARGUS.
-- Gatilhos de auditoria para custo, prazo, aditivos e recorrência.
-- Camada inicial de Machine Learning para probabilidade de atraso, estouro de custo e retrabalho.
-- Exportação CSV e Excel para relatórios e integração com frontend.
-
-## Arquitetura
-
-```text
-React/Frontend -> FastAPI -> SQLite/PostgreSQL
-                   |-> ETL TCE-RJ / Portal Macaé
-                   |-> Scoring Engine ARGUS
-                   |-> ML Baseline Model
-                   |-> Exports CSV/XLSX
-```
-
-Por padrão, o projeto roda com SQLite para facilitar a demo. Para produção/MVP, troque `DATABASE_URL` para PostgreSQL.
+- Regras do **Índice de Eficiência Composta ARGUS (IEC)** consolidadas em `app/services/scoring.py`.
+- Pesos oficiais implementados:
+  - Custo Paramétrico: 30%
+  - Prazo: 25%
+  - Qualidade Técnica e Aditivos: 20%
+  - Recorrência Territorial: 15%
+  - Impacto Socioeconômico: 10%
+- Fórmulas revisadas conforme o mapeamento de regras:
+  - Custo: `max(0, 100 - ((Custo Real - Custo Referência) / Custo Referência) * 100)`
+  - Prazo: `max(0, 100 - (Dias de Atraso / 90) * 100)`
+  - Qualidade: `max(0, 100 - ((Variação de Aditivos % / 25) * 100) - Penalidades CREA)`
+  - Impacto socioeconômico: `(1 - IDH Local) * 100`
+- Matriz CREA incluída no cálculo:
+  - Infração leve: -5 pontos
+  - Infração média: -15 pontos
+  - Infração grave/embargo: -40 pontos
+- Regra de criticidade social implementada: alertas de obras em regiões com `IDH < 0.600` recebem multiplicador `1.5x` no peso de criticidade.
+- Recorrência territorial preparada para receber `territorial_overlap_ratio`; quando não houver geometria, usa fallback documentado por recorrência do mesmo CNPJ contratado.
+- ETL consolidado com scheduler quinzenal a cada 15 dias.
+- Importador CSV ajustado para lidar melhor com:
+  - colunas com BOM (`\ufeff`);
+  - datas em milissegundos Unix vindas do TCE-RJ;
+  - campos do Portal de Macaé;
+  - campos de contratos, licitações e obras paralisadas do TCE-RJ;
+  - campos opcionais de SINAPI, CREA e sobreposição territorial.
+- Migração leve automática adicionada em `app/db/init_db.py` para incluir novas colunas em bancos já existentes sem depender de Alembic.
+- Novas rotas de auditoria do score:
+  - `GET /api/v1/works/scoring/rules`
+  - `GET /api/v1/works/{work_id}/score-explain`
 
 ## Como rodar localmente
 
 ```bash
-cd argus_backend
 python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# Windows PowerShell: .venv\Scripts\Activate.ps1
+source .venv/bin/activate  # Linux/macOS
+# No Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
-Acesse:
+A API ficará disponível em:
 
-- API: `http://localhost:8000`
-- Swagger: `http://localhost:8000/docs`
-- Health: `http://localhost:8000/health`
-
-## Popular dados de demonstração
-
-```bash
-python scripts/seed_demo.py
+```text
+http://localhost:8000
 ```
 
-Depois acesse:
+Documentação Swagger:
 
-```bash
-GET http://localhost:8000/api/v1/works
-GET http://localhost:8000/api/v1/analytics/summary
-GET http://localhost:8000/api/v1/analytics/map/geojson
+```text
+http://localhost:8000/docs
 ```
 
-## Fluxo com dados reais
-
-### 1. Baixar TCE-RJ
+## Como rodar com Docker
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/etl/tcerj/run?municipio=Macae"
+docker compose up --build
 ```
 
-Isso salva os CSVs em `data/raw/tcerj`.
+## Como rodar o ETL
 
-### 2. Importar consolidado
+Pelo Swagger ou por requisição HTTP:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/etl/sync-public-data?municipio=Macae"
+```
+
+Importar manualmente um CSV local:
 
 ```bash
 curl -X POST "http://localhost:8000/api/v1/etl/import-csv?path=data/raw/tcerj/obras_consolidado.csv&municipio=Macae"
 ```
 
-### 3. Recalcular tudo
+Consultar status da atualização automática:
+
+```bash
+curl "http://localhost:8000/api/v1/etl/sync-status"
+```
+
+O scheduler interno roda uma sincronização ao iniciar a API e depois repete o processo a cada 15 dias.
+
+## Rotas principais para teste
+
+Health check:
+
+```bash
+curl "http://localhost:8000/health"
+```
+
+Listar obras:
+
+```bash
+curl "http://localhost:8000/api/v1/works?municipio=Macae&limit=20"
+```
+
+Recalcular todos os scores:
 
 ```bash
 curl -X POST "http://localhost:8000/api/v1/works/recompute-all"
 ```
 
-## Índice ARGUS
+Ver regras do score:
 
-O score final é calculado em escala 0 a 100 usando os pesos:
+```bash
+curl "http://localhost:8000/api/v1/works/scoring/rules"
+```
 
-- Custo paramétrico: 30%
-- Variáveis de prazo: 25%
-- Qualidade técnica/aditivos: 20%
-- Recorrência territorial: 15%
-- Impacto socioeconômico: 10%
+Auditar a memória de cálculo de uma obra:
 
-## Observações importantes
+```bash
+curl "http://localhost:8000/api/v1/works/1/score-explain"
+```
 
-- O modelo de ML incluído é um baseline sintético para hackathon e prova de conceito. Ele deve ser substituído por dados rotulados reais quando houver ground truth suficiente.
-- A recorrência territorial está preparada no scoring como recorrência por contratado. Para a versão geoespacial completa, implemente polígonos/Convex Hull com dados de coordenadas/OSM.
-- A importação de CSV é tolerante a nomes de colunas diferentes do TCE-RJ e do portal de Macaé.
+Resumo analítico:
+
+```bash
+curl "http://localhost:8000/api/v1/analytics/summary?municipio=Macae"
+```
+
+GeoJSON para mapa:
+
+```bash
+curl "http://localhost:8000/api/v1/analytics/map/geojson"
+```
+
+## Bases usadas ou consideradas
+
+- TCE-RJ: contratos, licitações e obras paralisadas.
+- Portal da Transparência de Macaé: contratos e licitações.
+- IBGE/geobr: malhas territoriais, setores censitários e base para integração de IDH/território.
+- OpenStreetMap/osmnx: malha viária e apoio a análises microterritoriais.
+- SINAPI: benchmark de custo por m², quando disponível no dado importado ou enriquecido.
+- CREA: penalidades técnicas leves, médias e graves, quando disponíveis ou integradas posteriormente.
+
+## Observações de integração
+
+O ZIP `scripts` foi usado apenas como referência de formato de CSV e comportamento das extrações. Ele não foi alterado.
+
+Para melhorar a precisão do pilar de custo, recomenda-se enriquecer os CSVs com `benchmark_cost_m2` baseado no SINAPI. Para melhorar a recorrência territorial, recomenda-se alimentar `territorial_overlap_ratio` após processamento geoespacial com polígonos/convex hull das intervenções.

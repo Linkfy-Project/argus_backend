@@ -66,7 +66,17 @@ def recompute_work(db: Session, work_id: int):
 
     db.query(Alert).filter(Alert.work_id == work.id).delete()
     for alert in score.alerts:
-        db.add(Alert(work_id=work.id, **alert))
+        db.add(
+            Alert(
+                work_id=work.id,
+                code=alert["code"],
+                severity=alert["severity"],
+                severity_weight=float(alert.get("severity_weight", 0.0)),
+                severity_multiplier=float(alert.get("severity_multiplier", 1.0)),
+                weighted_severity=float(alert.get("weighted_severity", 0.0)),
+                message=alert["message"],
+            )
+        )
     db.commit()
     db.refresh(work)
     return work
@@ -77,3 +87,11 @@ def recompute_all(db: Session):
     for work_id in ids:
         recompute_work(db, work_id)
     return {"updated": len(ids)}
+
+
+def explain_score(db: Session, work_id: int) -> dict | None:
+    work = db.query(PublicWork).filter(PublicWork.id == work_id).first()
+    if not work:
+        return None
+    recurrence = contractor_recurrence(db, work)
+    return calculate_score(work, contractor_recurrence=recurrence).as_dict()
