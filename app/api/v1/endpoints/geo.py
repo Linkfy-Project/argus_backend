@@ -6,6 +6,7 @@ de mapas como Leaflet e Mapbox GL.
 """
 
 import json
+import math
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -67,10 +68,20 @@ def get_geo_layer(layer_type: str, db: Session = Depends(get_db)):
         if layer.length_m is not None:
             properties["length_m"] = layer.length_m
 
+        # Incluir propriedades extras (ex: idhm) do properties_json
+        if layer.properties_json:
+            try:
+                extra = json.loads(layer.properties_json)
+                for k, v in extra.items():
+                    if k not in properties:
+                        properties[k] = v
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         features.append({
             "type": "Feature",
             "geometry": geometry,
-            "properties": properties,
+            "properties": _sanitize_value(properties),
         })
 
     return {
@@ -79,3 +90,14 @@ def get_geo_layer(layer_type: str, db: Session = Depends(get_db)):
         "count": len(features),
         "features": features,
     }
+
+
+def _sanitize_value(v):
+    """Replace NaN/Inf floats with None for JSON serialization."""
+    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+        return None
+    if isinstance(v, dict):
+        return {k: _sanitize_value(val) for k, val in v.items()}
+    if isinstance(v, list):
+        return [_sanitize_value(item) for item in v]
+    return v

@@ -6,6 +6,7 @@ Fluxo:
 2. Extrai dados do Portal de Macaé.
 3. Importa CSVs disponíveis.
 4. Sincroniza camadas geoespaciais (município, setores, malha viária).
+5. Geocodifica obras sem coordenadas.
 
 Cada etapa possui logs de depuração (prefixo DEBUG:) para facilitar
 o monitoramento em tempo real no terminal.
@@ -19,6 +20,8 @@ from app.etl.tcerj_client import extract_tcerj
 from app.etl.macae_portal import update_macae_portal
 from app.etl.importer import import_csv
 from app.etl.geo_sync import sync_geo_layers
+from app.etl.geocode import assign_random_coordinates
+from app.etl.idh_sync import sync_idh
 
 
 def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> dict:
@@ -51,7 +54,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
     }
 
     # ── Step 1: Extração TCE-RJ ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 1/4: Extraindo dados do TCE-RJ...")
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 1/6: Extraindo dados do TCE-RJ...")
     try:
         tcerj_result = extract_tcerj(municipio=municipio, ano=ano)
         result["steps"].append(
@@ -73,7 +76,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         print(f"DEBUG: [ARGUS JOB]   ✘ TCE-RJ falhou: {exc}")
 
     # ── Step 2: Extração Portal de Macaé ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 2/4: Extraindo dados do Portal de Macaé...")
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 2/6: Extraindo dados do Portal de Macaé...")
     try:
         macae_result = update_macae_portal()
         result["steps"].append(
@@ -95,7 +98,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         print(f"DEBUG: [ARGUS JOB]   ✘ Portal Macaé falhou: {exc}")
 
     # ── Step 3: Importação de CSVs ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 3/4: Importando CSVs disponíveis...")
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 3/6: Importando CSVs disponíveis...")
 
     candidate_paths = [
         "data/raw/tcerj/obras_consolidado.csv",
@@ -181,7 +184,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
             db.close()
 
     # ── Step 4: Camadas geoespaciais ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 4/4: Sincronizando camadas geoespaciais...")
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 4/6: Sincronizando camadas geoespaciais...")
     try:
         geo_result = sync_geo_layers()
         result["steps"].append(
@@ -201,6 +204,50 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
             }
         )
         print(f"DEBUG: [ARGUS JOB]   ✘ Camadas geoespaciais falharam: {exc}")
+
+    # ── Step 5: Geocodificação de obras ──
+    db = SessionLocal()
+    try:
+        geo_stats = assign_random_coordinates(db)
+        result["steps"].append(
+            {
+                "step": "geocode_works",
+                "status": "ok",
+                "result": geo_stats,
+            }
+        )
+    except Exception as exc:
+        result["steps"].append(
+            {
+                "step": "geocode_works",
+                "status": "error",
+                "error": str(exc),
+            }
+        )
+    finally:
+        db.close()
+
+    # ── Step 6: Sincronização de IDH por setor censitário ──
+    db = SessionLocal()
+    try:
+        idh_stats = sync_idh(db)
+        result["steps"].append(
+            {
+                "step": "sync_idh",
+                "status": "ok",
+                "result": idh_stats,
+            }
+        )
+    except Exception as exc:
+        result["steps"].append(
+            {
+                "step": "sync_idh",
+                "status": "error",
+                "error": str(exc),
+            }
+        )
+    finally:
+        db.close()
 
     # ── Finalização ──
     finished_at = datetime.now()

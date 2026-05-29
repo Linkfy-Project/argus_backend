@@ -1,10 +1,10 @@
 from __future__ import annotations
-from datetime import date
+from datetime import date, datetime
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
 from app.models.work import PublicWork, Alert
 from app.schemas.work import WorkCreate
-from app.services.scoring import calculate_score, delay_days
+from app.services.scoring import calculate_score, delay_days, calculate_contractor_crea_totals
 from app.services.ml_service import predict_risks
 
 
@@ -18,6 +18,8 @@ def list_works(
     min_value: float | None = None,
     max_value: float | None = None,
     has_score: bool | None = None,
+    signed_from: str | None = None,
+    signed_to: str | None = None,
     page: int = 1,
     per_page: int = 25,
 ):
@@ -52,6 +54,20 @@ def list_works(
         q = q.filter(PublicWork.contract_value >= min_value)
     if max_value is not None:
         q = q.filter(PublicWork.contract_value <= max_value)
+
+    # ── Filtros temporais ─────────────────────────────────────
+    if signed_from:
+        try:
+            from_date = datetime.strptime(signed_from, "%Y-%m-%d").date()
+            q = q.filter(PublicWork.signed_at >= from_date)
+        except ValueError:
+            pass
+    if signed_to:
+        try:
+            to_date = datetime.strptime(signed_to, "%Y-%m-%d").date()
+            q = q.filter(PublicWork.signed_at <= to_date)
+        except ValueError:
+            pass
 
     if status:
         today = date.today()
@@ -114,6 +130,9 @@ def recompute_work(db: Session, work_id: int):
         return None
     recurrence = contractor_recurrence(db, work)
 
+    # 0. Pré-computar totais CREA do contratado para detecção de padrões suspeitos
+    contractor_work_count, contractor_crea_total = calculate_contractor_crea_totals(db, work)
+
     # 1. Predizer riscos ML ANTES do score (pois o score agora usa as probabilidades)
     risks = predict_risks({
         "contract_value": work.contract_value,
@@ -129,13 +148,15 @@ def recompute_work(db: Session, work_id: int):
     work.risk_cost_probability = risks["cost_overrun_probability"]
     work.risk_rework_probability = risks["rework_probability"]
 
-    # 2. Calcular score rule-based com probabilidades ML integradas
+    # 2. Calcular score rule-based com probabilidades ML integradas + CREA patterns
     score = calculate_score(
         work,
         contractor_recurrence=recurrence,
         risk_delay_probability=risks["delay_probability"],
         risk_cost_probability=risks["cost_overrun_probability"],
         risk_rework_probability=risks["rework_probability"],
+        contractor_work_count=contractor_work_count,
+        contractor_crea_total=contractor_crea_total,
     )
     work.cost_score = score.cost_score
     work.deadline_score = score.deadline_score

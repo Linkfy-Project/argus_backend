@@ -39,6 +39,8 @@ def index(
     min_value: float | None = None,
     max_value: float | None = None,
     has_score: bool | None = None,
+    signed_from: str | None = None,
+    signed_to: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=1, le=10000),
     db: Session = Depends(get_db),
@@ -53,6 +55,8 @@ def index(
         min_value=min_value,
         max_value=max_value,
         has_score=has_score,
+        signed_from=signed_from,
+        signed_to=signed_to,
         page=page,
         per_page=per_page,
     )

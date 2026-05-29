@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import date
 
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
 from app.models.work import PublicWork
 
 # Pesos v2 — com ML Risk Score integrado (15% redistribuído dos outros pilares)
@@ -62,6 +65,33 @@ def safe_float(value, default: float | None = None) -> float | None:
 
 def get_work_value(work: PublicWork, attr: str, default=None):
     return getattr(work, attr, default)
+
+
+def calculate_contractor_crea_totals(db: Session, work: PublicWork) -> tuple[int, int]:
+    """
+    Calcula o total de infrações CREA e a quantidade de obras
+    associadas ao mesmo contratado (via contractor_document/CNPJ).
+
+    Retorna (contractor_work_count, contractor_crea_total).
+    Se não houver contractor_document, retorna (1, 0).
+    """
+    if not work.contractor_document:
+        return 1, 0
+
+    row = (
+        db.query(
+            func.count(PublicWork.id).label("work_count"),
+            (
+                func.coalesce(func.sum(PublicWork.crea_light_count), 0)
+                + func.coalesce(func.sum(PublicWork.crea_medium_count), 0)
+                + func.coalesce(func.sum(PublicWork.crea_grave_count), 0)
+            ).label("crea_total"),
+        )
+        .filter(PublicWork.contractor_document == work.contractor_document)
+        .one()
+    )
+
+    return row.work_count or 1, int(row.crea_total or 0)
 
 
 def delay_days(work: PublicWork, today: date | None = None) -> int:
@@ -215,6 +245,82 @@ def calculate_cost_score(work: PublicWork, benchmark_cost_m2: float | None = Non
     score = clamp(score)
     details["final_score"] = score
     return score, details, alerts
+
+
+def detect_crea_suspicious_patterns(
+    work: PublicWork,
+    contractor_work_count: int = 1,
+    contractor_crea_total: int = 0,
+) -> list[dict]:
+    """
+    Detecta padrões suspeitos nas anotações CREA de uma obra.
+
+    Padrões detectados:
+    1. Alta concentração de infrações leves (possível tentativa de mascarar problemas graves)
+    2. Múltiplas infrações graves (risco crítico)
+    3. Infrações em proporção desproporcional ao porte da obra
+    4. Mesmo contratado com muitas infrações em obras diferentes
+    5. Combinação suspeita — infrações médias + graves sem leves (subnotificação)
+    """
+    alerts: list[dict] = []
+
+    light = int(safe_float(get_work_value(work, "crea_light_count", 0), 0) or 0)
+    medium = int(safe_float(get_work_value(work, "crea_medium_count", 0), 0) or 0)
+    grave = int(safe_float(get_work_value(work, "crea_grave_count", 0), 0) or 0)
+    total_infractions = light + medium + grave
+
+    if total_infractions == 0:
+        return alerts
+
+    # Padrão 1: Muitas infrações leves acumuladas (>= 5) — possível tentativa de mascarar
+    if light >= 5 and grave == 0:
+        _add_alert(
+            alerts, "ALERT_CREA_ACUMULO_LEVES", "alert",
+            f"Acúmulo de {light} infrações CREA leves sem infrações graves. Possível mascaramento de problemas técnicos.",
+            {"light_count": light, "medium_count": medium, "grave_count": grave},
+        )
+
+    # Padrão 2: Múltiplas infrações graves
+    if grave >= 2:
+        _add_alert(
+            alerts, "CRITICAL_CREA_MULTIPLAS_GRAVES", "critical",
+            f"Múltiplas infrações CREA graves ({grave}). Risco crítico de irregularidade técnica.",
+            {"grave_count": grave},
+        )
+
+    # Padrão 3: Proporção desproporcional — muitas infrações para obra pequena
+    contract_value = safe_float(work.contract_value)
+    area_m2 = safe_float(work.area_m2)
+    if contract_value and contract_value < 500_000 and total_infractions >= 3:
+        _add_alert(
+            alerts, "ALERT_CREA_DESPROPORCIONAL", "alert",
+            f"Obra de pequeno porte (R$ {contract_value:,.0f}) com {total_infractions} infrações CREA. Proporção desproporcional.",
+            {"total_infractions": total_infractions, "contract_value": contract_value},
+        )
+    elif area_m2 and area_m2 < 500 and total_infractions >= 3:
+        _add_alert(
+            alerts, "ALERT_CREA_DESPROPORCIONAL", "alert",
+            f"Obra de pequena área ({area_m2:.0f} m²) com {total_infractions} infrações CREA. Proporção desproporcional.",
+            {"total_infractions": total_infractions, "area_m2": area_m2},
+        )
+
+    # Padrão 4: Contratado com muitas infrações em múltiplas obras
+    if contractor_work_count >= 3 and contractor_crea_total >= 5:
+        _add_alert(
+            alerts, "ALERT_CREA_RECORRENCIA_CONTRATADO", "alert",
+            f"Contratado associado a {contractor_crea_total} infrações CREA em {contractor_work_count} obras. Padrão recorrente.",
+            {"contractor_work_count": contractor_work_count, "contractor_crea_total": contractor_crea_total},
+        )
+
+    # Padrão 5: Combinação suspeita — infrações médias + graves sem leves
+    if medium >= 2 and grave >= 1 and light == 0:
+        _add_alert(
+            alerts, "WARNING_CREA_PADRAO_SUSPEITO", "warning",
+            "Infrações CREA médias e graves sem nenhuma infração leve registrada. Possível subnotificação.",
+            {"light_count": light, "medium_count": medium, "grave_count": grave},
+        )
+
+    return alerts
 
 
 def calculate_deadline_score(work: PublicWork, today: date | None = None) -> tuple[float, dict, list[dict]]:
@@ -488,6 +594,8 @@ def calculate_score(
     risk_delay_probability: float | None = None,
     risk_cost_probability: float | None = None,
     risk_rework_probability: float | None = None,
+    contractor_work_count: int = 1,
+    contractor_crea_total: int = 0,
 ) -> ScoreResult:
     """
     Calcula o Índice Composto de Eficiência ARGUS (score 0-100).
@@ -516,7 +624,14 @@ def calculate_score(
         risk_rework_probability=risk_rework_probability,
     )
 
-    for group in (cost_alerts, deadline_alerts, quality_alerts, recurrence_alerts, social_alerts):
+    # CREA suspicious pattern detection (Pilar 3 enhancement)
+    crea_suspicious_alerts = detect_crea_suspicious_patterns(
+        work,
+        contractor_work_count=contractor_work_count,
+        contractor_crea_total=contractor_crea_total,
+    )
+
+    for group in (cost_alerts, deadline_alerts, quality_alerts, recurrence_alerts, social_alerts, crea_suspicious_alerts):
         alerts.extend(group)
 
     apply_social_criticality_multiplier(work, alerts)
