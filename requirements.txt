@@ -1,19 +1,43 @@
+# ──────────────────────────────────────────────────────────
+# Argus Backend — requirements.txt
+# Plataforma de Monitoramento de Obras Públicas
+# Python 3.11+
+# ──────────────────────────────────────────────────────────
+
+# ── Core Framework ──────────────────────────────────────
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic-settings==2.7.1
-SQLAlchemy==2.0.36
-pandas==2.2.3
-requests==2.32.3
-urllib3<3
-charset-normalizer<4
 python-multipart==0.0.20
+
+# ── Database ────────────────────────────────────────────
+SQLAlchemy==2.0.36
+psycopg2-binary==2.9.10
+
+# ── Data Processing ─────────────────────────────────────
+pandas==2.2.3
+numpy>=1.26,<2.0
+openpyxl==3.1.5
+
+# ── Machine Learning ────────────────────────────────────
 scikit-learn==1.6.1
 joblib==1.4.2
-reportlab==4.2.5
-openpyxl==3.1.5
-pytest==8.3.4
+
+# ── HTTP / Networking ───────────────────────────────────
+requests==2.32.3
 httpx==0.28.1
-apscheduler==3.11.2
-psycopg2-binary==2.9.10
+urllib3<3
+charset-normalizer<4
+
+# ── PDF Generation ──────────────────────────────────────
+reportlab==4.2.5
+
+# ── Geo / Spatial ───────────────────────────────────────
 geobr==0.2.2
 osmnx==2.1.0
+
+# ── Task Scheduling ─────────────────────────────────────
+apscheduler==3.11.2
+
+# ── Testing ─────────────────────────────────────────────
+pytest==8.3.4
