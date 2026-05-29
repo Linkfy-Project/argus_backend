@@ -1,3 +1,12 @@
+"""
+Módulo de importação de CSV para o ARGUS.
+
+Contém funções de limpeza, transformação e importação de dados de obras
+públicas a partir de arquivos CSV. Inclui filtro semântico para garantir
+que apenas registros que são efetivamente obras públicas de engenharia
+sejam importados.
+"""
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -15,6 +24,307 @@ warnings.filterwarnings("ignore", message="Parsing dates in.*dayfirst.*")
 from app.models.work import PublicWork
 from app.services.work_service import recompute_many
 from app.utils.parsing import first_present
+
+
+# ──────────────────────────────────────────────
+# Filtro semântico de obras públicas de engenharia
+# ──────────────────────────────────────────────
+
+# Regex para identificar obras públicas de engenharia
+# Estratégia de dois níveis:
+#   Nível 1 - Palavras-chave fortes isoladas (auto-incluem)
+#   Nível 2 - Palavras moderadas em contexto (combinadas com outras evidências)
+#
+# Regras de design para evitar falsos positivos:
+# 1. "escola" isoladamente NÃO é aceito (falso positivo em material escolar)
+# 2. "hospital" isoladamente NÃO é aceito (falso positivo em compras hospitalares)
+# 3. "posto de saúde" ou "unidade básica" → só vale se houver evidência forte de construção
+#    (como "construção", "reforma", "obra" nas proximidades)
+# 4. Palavras como "construção civil", "engenharia", "pavimentação" → auto-incluem
+IS_WORK_STRONG_REGEX = re.compile(r'''(?ix)
+    # ── Nível 1: Evidência FORTE (auto-inclui) ──
+    (?:
+        # Construção civil é sempre obra
+        constru[cç][aã]o\s+civil
+        |
+        # Engenharia diretamente
+        (?:obras?\s+de\s+|servi[cç]os?\s+de\s+|empresa\s+especializada\s+em\s+)
+        (?:engenharia|constru[cç][aã]o\s+civil)
+        |
+        # Pavimentação / asfalto / calçamento
+        pavimenta[cç][aã]o|asfalto|cal[cç]amento
+        |
+        # Drenagem / saneamento / esgotamento
+        (?:sistema\s+de\s+)?(?:drenagem|esgotamento\s+sanit[aá]rio|macrodrenagem)
+        |
+        # Estação de tratamento / elevatória
+        esta[cç][aã]o\s+(?:de\s+)?(?:tratamento|elevat[oó]ria|recalque)
+        |
+        # Infraestrutura (urbana, de redes, serviços de)
+        infraestrutura\s+(?:do|no|de|em|urbana|de\s+redes|de\s+comunica[cç][aã]o)
+        |
+        # Serviços de infraestrutura
+        servi[cç]os?\s+de\s+infraestrutura
+        |
+        # Regularização fundiária
+        regulariza[cç][aã]o\s+fundi[aá]ria
+        |
+        # Obra de contenção / estabilização geotécnica
+        (?:muro\s+de\s+conten[cç][aã]o|estabiliza[cç][aã]o\s+geot[ée]cnica)
+        |
+        # Pontes, viadutos, passarelas, ciclovias
+        ponte|viaduto|passarela|ciclovia
+        |
+        # Urbanização de bairros/loteamentos
+        urbaniza[cç][aã]o\s+(?:do|de|no)
+        |
+        # Praça pública
+        (?:constru[cç][aã]o|reforma|execu[cç][aã]o).{0,50}(?:pra[çc]a|quadra\s+poliesportiva)
+        |
+        # Cobertura de quadra
+        cobertura\s+de\s+quadra\s+poliesportiva
+        |
+        # Obras de arte (pontes, etc.)
+        (?:tabuleiro\s+de\s+ponte|constru[cç][aã]o\s+da\s+ponte)
+        |
+        # Rede de captação / galeria
+        (?:rede\s+de\s+capta[cç][aã]o|galeria\s+de\s+[áa]guas\s+pluviais)
+        |
+        # Recuperação estrutural / reforço estrutural
+        recupera[cç][aã]o\s+estrutural|refor[cç]o\s+estrutural
+        |
+        # Estradas vicinais / rurais
+        (?:manuten[cç][aã]o\s+(?:de\s+)?)?estradas?\s+vicinais?
+        |
+        # Materiais/insumos para obra (brita, pedra, etc. quando no contexto de obra)
+        (?:aquisi[cç][aã]o|fornecimento).{0,40}(?:brita|pedra\s+de\s+m[aã]o|insumos?\s+brutos?).{0,40}(?:drenagem|pavimenta[cç][aã]o|estradas?|obra|infraestrutura)
+        |
+        # Manutenção de estradas
+        manuten[cç][aã]o\s+ostensiva|manuten[cç][aã]o\s+(?:de\s+)?estradas?
+        |
+        # Fornecimento de materiais/equipamentos para infraestrutura
+        fornecimento\s+de\s+materiais.{0,30}(?:infraestrutura|obra|estrada)
+    )
+    |
+    # ── Nível 2: Evidência MODERADA (requer contexto de construção/reforma) ──
+    (?:
+        (?:constru[cç][aã]o|reforma|amplia[cç][aã]o|execu[cç][aã]o\s+das?\s+obras?)
+        .{0,60}
+        (?:
+            creche|cemit[eé]rio|delegacia|esta[cç][aã]o\s+ferrovi[aá]ria|
+            castelo\s+d[`\'´\x27]?[aã]gua|academia\s+popular|
+            conjunto\s+habitacional|condom[ií]nio\s+popular|habita[cç][aã]o\s+popular|
+            unidade\s+b[aá]sica\s+de\s+sa[uú]de|posto\s+de\s+sa[uú]de|
+            bloco\s+de\s+t[uú]mulo|hemocentro|
+            escola\s+municipal|hospital\s+municipal|
+            pr[eé]dio\s+do\s+(?:hemocentro|hospital|creche|escola)
+        )
+    )
+''')
+
+# Palavras que indicam que NÃO é obra (falsos positivos comuns)
+# Usado como contra-filtro para evitar registros que mencionam "escola", "hospital", etc.
+# mas na verdade são compras de material, serviços não-obra etc.
+NON_WORK_WEAK_REGEX = re.compile(r'''(?ix)
+    # Compras de materiais que NÃO são insumos de obra
+    # Nota: materiais como brita, pedra, cimento para obra NÃO devem ser rejeitados
+    aquisi[cç][aã]o\s+de\s+(?:
+        medicamento|uniforme|ve[ií]culo|material\s+escolar|
+        material\s+cama\s+e\s+banho|material\s+de\s+escrit[oó]rio|
+        material\s+de\s+primeiros\s+socorros|caf[eé]\s+em\s+p[oó]|
+        [aá]gua\s+mineral|fraldas?\s+descart[aá]veis|
+        g[eé]neros?\s+aliment[ií]cios
+    )|
+    medicamento|fraldas?\s+descart[aá]veis|
+    insemina[cç][aã]o\s+artificial|
+    empr[eé]stimo\s+pessoal|
+    # Treinamentos, cursos e capacitação (não são obras)
+    curso\s+de\s+(?:capacita[cç][aã]o|treinamento|qualifica[cç][aã]o)|
+    capacita[cç][aã]o\s+(?:de\s+)?servidores|
+    a[cç][aã]o\s+de\s+capacita[cç][aã]o|
+    treinamento\s+(?:de\s+)?servidores|
+    inscri[cç][aã]o\s+de\s+servidores|
+    qualifica[cç][aã]o\s+profissional|
+    contrata[cç][aã]o\s+de\s+artista|
+    apresenta[cç][aã]o\s+art[ií]stica|
+    palestra|
+    show\s+(?:musical|art[ií]stico)|
+    evento\s+(?:cultural|art[ií]stico)|
+    # Serviços não-relacionados a obras (mas relacionados a estradas DEVEM passar)
+    # "infraestrutura de redes de comunicação" é borderline — mantendo como obra
+    acesso.*internet|
+    fornecimento\s+de\s+energia\s+el[eé]trica|
+    concess[aã]o\s+de\s+empr[eé]stimo|
+    servi[cç]o\s+de\s+buffet|
+    seguran[aç]a\s+p[uú]blica|
+    # Serviços de escritório/administrativos
+    arbitragem|media[cç][aã]o\s+de\s+conflitos
+''')
+
+
+def is_work_related(
+    object_description: str | None,
+    contract_type: str | None = None,
+) -> bool:
+    """
+    Verifica se um registro é realmente uma obra pública de engenharia.
+
+    Estratégia de três níveis:
+    - Nível 1 (rápido): Se o CSV tem coluna 'Tipo de Contrato' com valor
+      'Obras e Serviços de Engenharia', já é aprovado.
+    - Nível 2 (contra-filtro): Se o objeto contém palavras típicas de
+      compras/serviços não-obra, rejeita.
+    - Nível 3 (semântico): Aplica regex com palavras-chave fortes (auto-incluem)
+      e palavras moderadas (requerem contexto de construção/reforma).
+
+    Args:
+        object_description: Descrição/objeto do contrato ou licitação.
+        contract_type: Tipo de contrato (ex: "Obras e Serviços de Engenharia").
+
+    Returns:
+        True se o registro é relacionado a obras públicas de engenharia.
+    """
+    # Nível 1: Tipo de contrato já classifica como obra
+    if contract_type is not None and isinstance(contract_type, str):
+        ct = contract_type.strip().lower()
+        if ct in ("obras e serviços de engenharia", "obras e servicos de engenharia"):
+            return True
+
+    # Verifica se object_description é string não-vazia
+    if object_description is None or not isinstance(object_description, str):
+        return False
+
+    obj_lower = object_description.lower().strip()
+    if not obj_lower:
+        return False
+
+    # Nível 2: Contra-filtro — verificar se é claramente compra/serviço não-obra
+    # Se a regex de não-obra encontrar match, a linha NÃO é obra
+    if NON_WORK_WEAK_REGEX.search(obj_lower):
+        # Exceção: se também tem palavra forte de obra, pode ser obra mesmo assim
+        # Ex: "Aquisição de material para reforma de escola" — isso é obra
+        # Mas "Aquisição de material escolar" — não é obra
+        # Se tem "construção" ou "reforma" forte, prevalece
+        if IS_WORK_STRONG_REGEX.search(obj_lower):
+            return True
+        return False
+
+    # Nível 3: Regex semântico principal
+    return bool(IS_WORK_STRONG_REGEX.search(obj_lower))
+
+
+# ──────────────────────────────────────────────
+# Extração de endereço a partir da descrição
+# ──────────────────────────────────────────────
+
+# Regex para extrair endereço do object_description
+# Estratégia: tenta padrões do mais específico ao mais genérico.
+
+# Padrão 1: LOCALIZADA NA/NO <endereço completo>
+# Captura do início do endereço até delimitador (COM FORNECIMENTO, PARA, MACAÉ, etc.)
+ADDR_MAIN = re.compile(
+    r'(?:LOCALIZAD[AO]|SITUAD[AO]|EXISTENTE)\s+'
+    r'(?:NA|À|NO|EM|Á|A)\s+'
+    r'((?:RUA|AVENIDA|AV\.|ESTRADA|PRA[CÇ]A|TRAVESSA|ALAMEDA|LARGO|RODOVIA|VIA)\s+'
+    r'(?:[\wÀ-ÿ\.\,\s/\-\(\)]+?))'
+    r'(?=,\s*COM\s+FORNECIMENTO|\s+COM\s+FORNECIMENTO|,\s*PARA\s+ATENDER|\.\s*$|;\s*$|\s*MAC[AE])',
+    re.IGNORECASE
+)
+
+# Padrão 2: LOCALIZADA NO BAIRRO <nome>
+ADDR_BAIRRO = re.compile(
+    r'(?:LOCALIZAD[AO]|SITUAD[AO])?\s*'
+    r'(?:NO|NA|DO|DA|EM)\s+'
+    r'((?:BAIRRO|DISTRITO|LOCALIDADE|SUB[-\s]DISTRITO)\s+'
+    r'[\wÀ-ÿ]+(?:\s+(?:DOS?|DAS?|DE)\s+[\wÀ-ÿ]+)*)'
+    r'(?=,\s*MAC[AE]|\s*MAC[AE]|,\s*COM\s+FORNECIMENTO|$)',
+    re.IGNORECASE
+)
+
+# Padrão 3: NA/NO <RUA/AV> <nome> (sem LOCALIZADA)
+ADDR_VIA = re.compile(
+    r'(?:NA|À|NO|EM)\s+'
+    r'((?:RUA|AVENIDA|AV\.|ESTRADA|TRAVESSA|ALAMEDA|LARGO|RODOVIA|VIA)\s+'
+    r'[\wÀ-ÿ\.\,\s/\-\(\)]+?)'
+    r'(?=,\s*COM\s+FORNECIMENTO|\s+COM\s+FORNECIMENTO|,\s*MAC[AE]|\s*MAC[AE]|,\s*PARA|\.\s*$|$)',
+    re.IGNORECASE
+)
+
+# Padrão 4: Captura genérica de BAIRRO no texto
+# "BAIRRO X", "NO BAIRRO X", "DO BAIRRO X"
+ADDR_GENERICO = re.compile(
+    r'(?:NO|DO|DA|EM)\s+'
+    r'((?:BAIRRO|DISTRITO|LOCALIDADE|ILHA|PRAIA)\s+'
+    r'[\wÀ-ÿ]+(?:\s+(?:DOS?|DAS?|DE)\s+[\wÀ-ÿ]+)*)',
+    re.IGNORECASE
+)
+
+# Padrão 5: NO/NA <local> sem BAIRRO (ex: "NO FRADE")
+ADDR_SIMPLE = re.compile(
+    r'(?:LOCALIZAD[AO]|SITUAD[AO])?\s*(?:NO|NA|EM)\s+'
+    r'((?:[A-Z][a-zÀ-ÿ]+\s+){1,4}?MAC[AE])',
+    re.IGNORECASE
+)
+
+# Após capturar o match, limpa sufixos desnecessários como "MACAÉ/RJ" no final
+ADDRESS_CLEANUP_REGEX = re.compile(r'''(?ix)
+    ,?\s*MAC[AE][ÓO]?\s*[-–/]?\s*RJ\s*$|
+    ,?\s*MACA[EÉ]\s*[-–]\s*RJ\s*$|
+    \s*[-–]\s*MACA[EÉ]\s*$
+''')
+
+
+def extract_address_from_description(description: str | None) -> str | None:
+    """
+    Extrai endereço de uma descrição de obra usando regex.
+
+    Usa múltiplas estratégias em ordem de precisão:
+    1. "LOCALIZADA NA RUA X, BAIRRO Y" (via + bairro)
+    2. "LOCALIZADA NO BAIRRO Y" (só bairro)
+    3. "NA RUA X, BAIRRO Y" (sem prefixo)
+    4. "NO BAIRRO Y" (fallback bairro)
+    5. "NO SANA, MACAÉ/RJ" (localidade)
+
+    Args:
+        description: Descrição/objeto do contrato.
+
+    Returns:
+        Endereço extraído ou None se não encontrado.
+    """
+    # Importa re se não estiver disponível no escopo
+    import re as _re_module
+
+    if not description or not isinstance(description, str):
+        return None
+
+    desc = description.strip()
+    if not desc:
+        return None
+
+    # Tenta cada estratégia em ordem
+    addr = None
+    for regex in [ADDR_MAIN, ADDR_BAIRRO, ADDR_VIA, ADDR_GENERICO, ADDR_SIMPLE]:
+        m = regex.search(desc)
+        if m and m.lastindex and m.group(1):
+            addr = m.group(1).strip()
+            break
+
+    if not addr:
+        return None
+
+    # Limpa sufixos como ", MACAÉ/RJ" do final
+    addr = re.sub(r',?\s*MAC[AE][ÓO]?\s*[-–/]?\s*RJ\s*$', '', addr).strip()
+    addr = re.sub(r',?\s*MACA[EÉ]\s*[-–]\s*RJ\s*$', '', addr).strip()
+    addr = re.sub(r'\s*[-–]\s*MACA[EÉ]\s*$', '', addr).strip()
+
+    # Remove vírgulas no início/fim e espaços duplicados
+    addr = addr.strip(' ,;')
+    addr = _re_module.sub(r'\s+', ' ', addr)
+
+    if not addr or len(addr) < 5:
+        return None
+
+    return addr[:250]
 
 
 def clean_value(value):
@@ -467,9 +777,11 @@ def row_to_payload(row: dict, default_municipio: str = "Macae") -> dict:
         "status": clean_str(
             first_present(row, ["status", "Status", "Situacao", "Situação", "StatusContrato", "TipoParalisacao"])
         ),
-        "address": clean_str(
-            first_present(row, ["Endereco", "Endereço", "address", "logradouro"])
-        ),
+        "address": (
+            addr := clean_str(
+                first_present(row, ["Endereco", "Endereço", "address", "logradouro"])
+            )
+        ) or extract_address_from_description(object_description),
         "neighborhood": clean_str(
             first_present(row, ["Bairro", "bairro", "neighborhood"])
         ),
@@ -578,6 +890,20 @@ def import_csv(
                         "row": row_number,
                         "status": "skipped",
                         "reason": "Linha sem objeto, contrato ou licitação.",
+                    }
+                )
+                continue
+
+            # Filtro semântico: verifica se o registro é realmente uma obra pública
+            if not is_work_related(
+                object_description=payload.get("object_description"),
+                contract_type=payload.get("contract_type"),
+            ):
+                errors.append(
+                    {
+                        "row": row_number,
+                        "status": "skipped",
+                        "reason": "Registro não é uma obra pública de engenharia (filtro semântico).",
                     }
                 )
                 continue
