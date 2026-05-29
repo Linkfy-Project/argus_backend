@@ -1,4 +1,5 @@
 from datetime import date, datetime
+import math
 from pydantic import BaseModel, ConfigDict
 
 class WorkBase(BaseModel):
@@ -97,3 +98,11 @@ class PredictionOutput(BaseModel):
     cost_overrun_probability: float
     rework_probability: float
     model_version: str
+
+class PaginatedWorks(BaseModel):
+    """Resposta paginada para listagem de obras."""
+    items: list[WorkRead]
+    total: int
+    page: int
+    per_page: int
+    total_pages: int

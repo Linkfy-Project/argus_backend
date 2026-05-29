@@ -1,4 +1,4 @@
-# Commit: Otimização massiva de performance e logs de depuração no scheduler
+# Commit: Otimização massiva de performance, logs de depuração e visualizador de mapa
 
 ## Arquivos modificados:
 

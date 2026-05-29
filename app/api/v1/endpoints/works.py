@@ -1,7 +1,8 @@
+import math
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.schemas.work import WorkCreate, WorkRead
+from app.schemas.work import WorkCreate, WorkRead, PaginatedWorks
 from app.services.work_service import create_work, explain_score, get_work, list_works, recompute_all, recompute_work
 from app.services.scoring import WEIGHTS, CREA_PENALTIES, CRITICAL_IDH_THRESHOLD, CRITICAL_IDH_MULTIPLIER
 
@@ -28,9 +29,41 @@ def scoring_rules():
         },
     }
 
-@router.get("", response_model=list[WorkRead])
-def index(municipio: str | None = None, min_score: float | None = None, max_score: float | None = None, limit: int = Query(100, le=500), offset: int = 0, db: Session = Depends(get_db)):
-    return list_works(db, municipio=municipio, min_score=min_score, max_score=max_score, limit=limit, offset=offset)
+@router.get("", response_model=PaginatedWorks)
+def index(
+    municipio: str | None = None,
+    min_score: float | None = None,
+    max_score: float | None = None,
+    status: str | None = None,
+    search: str | None = None,
+    min_value: float | None = None,
+    max_value: float | None = None,
+    has_score: bool | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=1, le=10000),
+    db: Session = Depends(get_db),
+):
+    items, total = list_works(
+        db,
+        municipio=municipio,
+        min_score=min_score,
+        max_score=max_score,
+        status=status,
+        search=search,
+        min_value=min_value,
+        max_value=max_value,
+        has_score=has_score,
+        page=page,
+        per_page=per_page,
+    )
+    total_pages = max(1, math.ceil(total / per_page))
+    return PaginatedWorks(
+        items=items,
+        total=total,
+        page=page,
+        per_page=per_page,
+        total_pages=total_pages,
+    )
 
 @router.post("", response_model=WorkRead)
 def create(payload: WorkCreate, db: Session = Depends(get_db)):

@@ -14,11 +14,16 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        return [
+        # Em development, permite qualquer origem para facilitar o desenvolvimento
+        # local (evita problemas de CORS com diferentes portas do frontend)
+        if self.ENVIRONMENT == "development":
+            return ["*"]
+        origins = [
             item.strip()
             for item in self.BACKEND_CORS_ORIGINS.split(",")
             if item.strip()
         ]
+        return origins
 
 
 @lru_cache

@@ -1,21 +1,87 @@
 from __future__ import annotations
+from datetime import date
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from app.models.work import PublicWork, Alert
 from app.schemas.work import WorkCreate
 from app.services.scoring import calculate_score, delay_days
 from app.services.ml_service import predict_risks
 
 
-def list_works(db: Session, municipio: str | None = None, min_score: float | None = None, max_score: float | None = None, limit: int = 100, offset: int = 0):
+def list_works(
+    db: Session,
+    municipio: str | None = None,
+    min_score: float | None = None,
+    max_score: float | None = None,
+    status: str | None = None,
+    search: str | None = None,
+    min_value: float | None = None,
+    max_value: float | None = None,
+    has_score: bool | None = None,
+    page: int = 1,
+    per_page: int = 25,
+):
+    """Retorna (items, total) com paginação e filtros no banco de dados."""
     q = db.query(PublicWork).options(joinedload(PublicWork.alerts))
+
+    # ── Filtros ──────────────────────────────────────────────
     if municipio:
         q = q.filter(PublicWork.municipio.ilike(f"%{municipio}%"))
+
     if min_score is not None:
         q = q.filter(PublicWork.efficiency_score >= min_score)
     if max_score is not None:
         q = q.filter(PublicWork.efficiency_score <= max_score)
-    return q.order_by(PublicWork.efficiency_score.asc().nullslast(), PublicWork.id.desc()).offset(offset).limit(limit).all()
+
+    if has_score is False:
+        q = q.filter(PublicWork.efficiency_score.is_(None))
+    elif has_score is True:
+        q = q.filter(PublicWork.efficiency_score.isnot(None))
+
+    if search:
+        term = f"%{search}%"
+        q = q.filter(
+            or_(
+                PublicWork.object_description.ilike(term),
+                PublicWork.municipio.ilike(term),
+                PublicWork.contractor_name.ilike(term),
+            )
+        )
+
+    if min_value is not None:
+        q = q.filter(PublicWork.contract_value >= min_value)
+    if max_value is not None:
+        q = q.filter(PublicWork.contract_value <= max_value)
+
+    if status:
+        today = date.today()
+        if status == "Concluída":
+            q = q.filter(PublicWork.finished_at.isnot(None))
+        elif status == "Atrasada":
+            q = q.filter(PublicWork.finished_at.is_(None), PublicWork.due_at.isnot(None), PublicWork.due_at < today)
+        elif status == "Em andamento":
+            q = q.filter(
+                PublicWork.finished_at.is_(None),
+                PublicWork.signed_at.isnot(None),
+                or_(PublicWork.due_at.is_(None), PublicWork.due_at >= today),
+            )
+        elif status == "Planejada":
+            q = q.filter(PublicWork.finished_at.is_(None), PublicWork.signed_at.is_(None))
+        elif status == "Paralisada":
+            q = q.filter(PublicWork.status.ilike("%paralis%"))
+
+    # ── Contagem total (antes do offset/limit) ───────────────
+    total = q.count()
+
+    # ── Paginação ────────────────────────────────────────────
+    offset = (page - 1) * per_page
+    items = (
+        q.order_by(PublicWork.efficiency_score.asc().nullslast(), PublicWork.id.desc())
+        .offset(offset)
+        .limit(per_page)
+        .all()
+    )
+    return items, total
 
 
 def get_work(db: Session, work_id: int):
@@ -38,18 +104,17 @@ def contractor_recurrence(db: Session, work: PublicWork) -> int:
 
 
 def recompute_work(db: Session, work_id: int):
+    """
+    Recalcula scores e alertas de uma única obra.
+
+    Fluxo: 1) prediz riscos ML → 2) calcula score rule-based com ML integrado → 3) salva.
+    """
     work = db.query(PublicWork).filter(PublicWork.id == work_id).first()
     if not work:
         return None
     recurrence = contractor_recurrence(db, work)
-    score = calculate_score(work, contractor_recurrence=recurrence)
-    work.cost_score = score.cost_score
-    work.deadline_score = score.deadline_score
-    work.quality_score = score.quality_score
-    work.recurrence_score = score.recurrence_score
-    work.social_impact_score = score.social_impact_score
-    work.efficiency_score = score.efficiency_score
 
+    # 1. Predizer riscos ML ANTES do score (pois o score agora usa as probabilidades)
     risks = predict_risks({
         "contract_value": work.contract_value,
         "committed_value": work.committed_value,
@@ -64,6 +129,22 @@ def recompute_work(db: Session, work_id: int):
     work.risk_cost_probability = risks["cost_overrun_probability"]
     work.risk_rework_probability = risks["rework_probability"]
 
+    # 2. Calcular score rule-based com probabilidades ML integradas
+    score = calculate_score(
+        work,
+        contractor_recurrence=recurrence,
+        risk_delay_probability=risks["delay_probability"],
+        risk_cost_probability=risks["cost_overrun_probability"],
+        risk_rework_probability=risks["rework_probability"],
+    )
+    work.cost_score = score.cost_score
+    work.deadline_score = score.deadline_score
+    work.quality_score = score.quality_score
+    work.recurrence_score = score.recurrence_score
+    work.social_impact_score = score.social_impact_score
+    work.efficiency_score = score.efficiency_score
+
+    # 3. Atualizar alertas
     db.query(Alert).filter(Alert.work_id == work.id).delete()
     for alert in score.alerts:
         db.add(
@@ -141,16 +222,13 @@ def recompute_many(
             return 1
         return recurrence_map.get(work.contractor_document, 1)
 
-    # 4. Montar features para batch predict + calcular scores
-    print(f"DEBUG: [RECOMPUTE_BATCH] Calculando scores e montando features...")
+    # 4. Montar features para batch predict
+    print(f"DEBUG: [RECOMPUTE_BATCH] Montando features para ML...")
     features_list = []
-    score_results = []
     works_to_update = []
 
     for work in works:
         recurrence = _get_recurrence(work)
-        score = calculate_score(work, contractor_recurrence=recurrence)
-        score_results.append(score)
         works_to_update.append(work)
 
         features_list.append({
@@ -164,11 +242,25 @@ def recompute_many(
             "idh": work.idh,
         })
 
-    # 5. Predizer riscos em batch (1 chamada numpy)
+    # 5. Predizer riscos em batch PRIMEIRO (1 chamada numpy)
     print(f"DEBUG: [RECOMPUTE_BATCH] Predizendo riscos em batch ({len(features_list)} obras)...")
     risk_results = predict_risks_batch(features_list, models=ml_models)
 
-    # 6. Atualizar campos das obras em memória
+    # 6. Calcular scores rule-based COM probabilidades ML integradas
+    print(f"DEBUG: [RECOMPUTE_BATCH] Calculando scores com ML integrado...")
+    score_results = []
+    for work, risks in zip(works_to_update, risk_results):
+        recurrence = _get_recurrence(work)
+        score = calculate_score(
+            work,
+            contractor_recurrence=recurrence,
+            risk_delay_probability=risks["delay_probability"],
+            risk_cost_probability=risks["cost_overrun_probability"],
+            risk_rework_probability=risks["rework_probability"],
+        )
+        score_results.append(score)
+
+    # 7. Atualizar campos das obras em memória
     for work, score, risks in zip(works_to_update, score_results, risk_results):
         work.cost_score = score.cost_score
         work.deadline_score = score.deadline_score
@@ -215,8 +307,16 @@ def recompute_all(db: Session):
 
 
 def explain_score(db: Session, work_id: int) -> dict | None:
+    """Retorna o detalhamento completo do score de uma obra, incluindo ML."""
     work = db.query(PublicWork).filter(PublicWork.id == work_id).first()
     if not work:
         return None
     recurrence = contractor_recurrence(db, work)
-    return calculate_score(work, contractor_recurrence=recurrence).as_dict()
+    # Usa as probabilidades ML já salvas no banco (se existirem)
+    return calculate_score(
+        work,
+        contractor_recurrence=recurrence,
+        risk_delay_probability=work.risk_delay_probability,
+        risk_cost_probability=work.risk_cost_probability,
+        risk_rework_probability=work.risk_rework_probability,
+    ).as_dict()
