@@ -1,14 +1,14 @@
 """
-Módulo de geocodificação em batch de obras públicas via Geoapify API.
+Módulo de geocodificação em batch de obras públicas via Google Maps Geocoding API.
 
 Fluxo:
 1. Busca obras sem latitude/longitude no banco.
 2. Monta endereços prioritários a partir do model_cache (extracao_endereco)
    e, em fallback, dos campos address/neighborhood/municipio da própria obra.
-3. Envia endereços em lotes de até 1000 para a Geoapify Batch Geocoding API.
-4. Faz polling até o job terminar e baixa os resultados (lat/lon).
-5. Atualiza public_works com as coordenadas reais.
-6. Somente endereços que a API NÃO conseguiu geocodificar recebem
+3. Envia endereços individualmente para a Google Maps Geocoding API
+   (com delay entre requisições para respeitar rate limits).
+4. Atualiza public_works com as coordenadas reais.
+5. Somente endereços que a API NÃO conseguiu geocodificar recebem
    coordenadas aleatórias dentro do polígono de Macaé (fallback).
 
 Uso:
@@ -33,26 +33,24 @@ from app.models.geo import GeoLayer
 
 
 # ──────────────────────────────────────────────────────────────
-# Constantes da Geoapify Batch Geocoding API
+# Constantes da Google Maps Geocoding API
 # ──────────────────────────────────────────────────────────────
 
-# URL base para criar um job de batch geocoding
-GEOAPIFY_BATCH_URL = "https://api.geoapify.com/v1/batch/geocode/search"
+# URL base da Google Maps Geocoding API
+GOOGLE_GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 
-# Máximo de endereços por lote (limite da API)
-BATCH_SIZE = 1000
-
-# Intervalo entre polls de status (em segundos)
-POLL_INTERVAL_SECONDS = 5
-
-# Máximo de tentativas de polling por lote
-MAX_POLL_ATTEMPTS = 120  # 120 * 5s = 10 minutos máximo por lote
+# Delay entre requisições individuais (em segundos) para respeitar rate limits
+# Google permite 50 req/s, mas usamos 0.5s para ser conservador
+REQUEST_DELAY_SECONDS = 0.5
 
 # Timeout da requisição HTTP (em segundos)
-HTTP_TIMEOUT = 30
+HTTP_TIMEOUT = 15
 
-# Filtro de país para restringir resultados ao Brasil
-COUNTRY_FILTER = "countrycode:br"
+# Número máximo de tentativas com backoff exponencial em caso de OVER_QUERY_LIMIT
+MAX_RETRIES = 3
+
+# Filtro de componentes para restringir resultados ao Brasil
+COMPONENT_FILTER = "country:BR"
 
 
 # ──────────────────────────────────────────────────────────────
@@ -191,143 +189,149 @@ def _build_address_for_work(
 
 
 # ──────────────────────────────────────────────────────────────
-# Comunicação com a Geoapify Batch API
+# Comunicação com a Google Maps Geocoding API (individual)
 # ──────────────────────────────────────────────────────────────
 
 
-def _create_batch_job(
+def _geocode_single_address(
+    address: str,
+    api_key: str,
+    client: httpx.Client,
+) -> tuple[float, float] | None:
+    """
+    Geocodifica um único endereço usando a Google Maps Geocoding API.
+
+    Args:
+        address: Endereço (string) para geocodificar.
+        api_key: Chave de API do Google Maps.
+        client: Instância de httpx.Client reutilizável.
+
+    Returns:
+        Tupla (latitude, longitude) se encontrado, ou None se não encontrado.
+
+    Raises:
+        Exception: Se a API retornar erro inesperado após todas as tentativas.
+    """
+    params = {
+        "address": address,
+        "key": api_key,
+        "language": "pt-BR",
+        "region": "br",
+        "components": COMPONENT_FILTER,
+    }
+
+    for tentativa in range(1, MAX_RETRIES + 1):
+        try:
+            response = client.get(GOOGLE_GEOCODE_URL, params=params)
+
+            if response.status_code == 200:
+                data = response.json()
+                status = data.get("status", "")
+
+                if status == "OK":
+                    # Sucesso — extrai lat/lon do primeiro resultado
+                    location = data["results"][0]["geometry"]["location"]
+                    lat = round(location["lat"], 6)
+                    lon = round(location["lng"], 6)
+                    return (lat, lon)
+
+                elif status == "ZERO_RESULTS":
+                    # Endereço não encontrado — não adianta tentar de novo
+                    return None
+
+                elif status == "OVER_QUERY_LIMIT":
+                    # Rate limit — faz backoff exponencial
+                    tempo_espera = 2 ** tentativa
+                    print(
+                        f"DEBUG: [GEOCODE]     Rate limit atingido. "
+                        f"Aguardando {tempo_espera}s (tentativa {tentativa}/{MAX_RETRIES})..."
+                    )
+                    time.sleep(tempo_espera)
+                    continue
+
+                elif status == "REQUEST_DENIED":
+                    # Erro de configuração — não adianta tentar de novo
+                    print(f"DEBUG: [GEOCODE]     ✘ REQUEST_DENIED: {data.get('error_message', '')}")
+                    return None
+
+                else:
+                    print(f"DEBUG: [GEOCODE]     ✘ Status inesperado: {status}")
+                    return None
+
+            else:
+                # Erro HTTP — tenta novamente com backoff
+                tempo_espera = 2 ** tentativa
+                print(
+                    f"DEBUG: [GEOCODE]     Erro HTTP {response.status_code}. "
+                    f"Aguardando {tempo_espera}s (tentativa {tentativa}/{MAX_RETRIES})..."
+                )
+                time.sleep(tempo_espera)
+
+        except httpx.TimeoutException:
+            print(f"DEBUG: [GEOCODE]     Timeout na tentativa {tentativa}/{MAX_RETRIES}")
+            time.sleep(2 ** tentativa)
+
+        except Exception as exc:
+            print(f"DEBUG: [GEOCODE]     Erro inesperado: {exc}")
+            time.sleep(2 ** tentativa)
+
+    # Esgotou todas as tentativas
+    print(f"DEBUG: [GEOCODE]     ✘ Falha após {MAX_RETRIES} tentativas para: {address[:80]}")
+    return None
+
+
+def _geocode_addresses(
     addresses: list[str],
     api_key: str,
-) -> dict[str, Any]:
+) -> dict[str, tuple[float, float]]:
     """
-    Cria um job de batch geocoding na Geoapify.
+    Geocodifica uma lista de endereços individualmente via Google Maps API.
+
+    Envia um endereço por vez com delay entre requisições para respeitar
+    os rate limits da API (50 req/s).
 
     Args:
         addresses: Lista de endereços (strings) para geocodificar.
-        api_key: Chave de API da Geoapify.
-
-    Returns:
-        Dicionário com 'id', 'status' e 'url' do job.
-
-    Raises:
-        Exception: Se a criação do job falhar.
-    """
-    url = f"{GEOAPIFY_BATCH_URL}?apiKey={api_key}&filter={COUNTRY_FILTER}&lang=pt"
-
-    print(f"DEBUG: [GEOCODE]   Enviando {len(addresses)} endereços para Geoapify batch...")
-
-    with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-        response = client.post(
-            url,
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            },
-            content=json.dumps(addresses),
-        )
-
-    if response.status_code != 202:
-        raise Exception(
-            f"Falha ao criar batch job (HTTP {response.status_code}): {response.text[:300]}"
-        )
-
-    job_data = response.json()
-    print(f"DEBUG: [GEOCODE]   ✔ Job criado: id={job_data.get('id')}")
-    return job_data
-
-
-def _poll_batch_job(
-    job_url: str,
-    api_key: str,
-) -> list[dict[str, Any]]:
-    """
-    Faz polling do job de batch geocoding até completar ou timeout.
-
-    Args:
-        job_url: URL retornada pelo job para consultar resultados.
-        api_key: Chave de API da Geoapify.
-
-    Returns:
-        Lista de resultados geocodificados (cada item tem 'query', 'lat', 'lon', etc.).
-
-    Raises:
-        Exception: Se o job falhar ou exceder o timeout.
-    """
-    # A URL retornada pelo job JÁ contém o apiKey, não precisamos adicionar novamente.
-    # Se por algum motivo não tiver, adicionamos.
-    if "apiKey=" in job_url:
-        poll_url = job_url
-    else:
-        poll_url = f"{job_url}&apiKey={api_key}"
-
-    print(f"DEBUG: [GEOCODE]   Aguardando resultados do job...")
-
-    for attempt in range(1, MAX_POLL_ATTEMPTS + 1):
-        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-            response = client.get(poll_url)
-
-        if response.status_code == 200:
-            # Job completo — retorna os resultados
-            results = response.json()
-            print(f"DEBUG: [GEOCODE]   ✔ Job concluído! {len(results)} resultados recebidos.")
-            return results
-
-        elif response.status_code == 202:
-            # Ainda processando
-            if attempt % 6 == 0:  # Log a cada 30 segundos
-                print(f"DEBUG: [GEOCODE]     ... ainda processando (tentativa {attempt}/{MAX_POLL_ATTEMPTS})")
-            time.sleep(POLL_INTERVAL_SECONDS)
-
-        else:
-            raise Exception(
-                f"Erro ao consultar job (HTTP {response.status_code}): {response.text[:300]}"
-            )
-
-    raise Exception(
-        f"Timeout ao aguardar resultados do job ({MAX_POLL_ATTEMPTS * POLL_INTERVAL_SECONDS}s)"
-    )
-
-
-def _extract_lat_lon_from_results(
-    results: list[dict[str, Any]],
-) -> dict[str, tuple[float, float]]:
-    """
-    Extrai lat/lon dos resultados da Geoapify, indexando pelo texto do query.
-
-    Args:
-        results: Lista de resultados da API batch.
+        api_key: Chave de API do Google Maps.
 
     Returns:
         Dicionário {texto_do_endereco: (lat, lon)} para os que obtiveram resultado.
     """
     mapping: dict[str, tuple[float, float]] = {}
+    total = len(addresses)
 
-    for item in results:
-        # O campo 'query.text' contém o endereço que foi enviado
-        query_text = item.get("query", {}).get("text", "")
-        lat = item.get("lat")
-        lon = item.get("lon")
+    # Reutiliza o mesmo client HTTP para todas as requisições (connection pooling)
+    with httpx.Client(timeout=HTTP_TIMEOUT) as client:
+        for i, addr in enumerate(addresses, start=1):
+            # Log de progresso a cada 10 endereços
+            if i % 10 == 0 or i == 1:
+                print(f"DEBUG: [GEOCODE]     Geocodificando {i}/{total}: {addr[:60]}...")
 
-        if query_text and lat is not None and lon is not None:
-            mapping[query_text] = (round(lat, 6), round(lon, 6))
+            result = _geocode_single_address(addr, api_key, client)
+            if result:
+                mapping[addr] = result
+
+            # Delay entre requisições para respeitar rate limits
+            if i < total:
+                time.sleep(REQUEST_DELAY_SECONDS)
 
     return mapping
 
 
 # ──────────────────────────────────────────────────────────────
-# Função principal: batch geocoding
+# Função principal: batch geocoding (via Google Maps individual)
 # ──────────────────────────────────────────────────────────────
 
 
 def batch_geocode_works(db: Session) -> dict:
     """
     Geocodifica em batch todas as obras de public_works que não possuem
-    latitude/longitude, usando a Geoapify Batch Geocoding API.
+    latitude/longitude, usando a Google Maps Geocoding API.
 
     Fluxo otimizado com cache em model_cache:
     1. Copia coordenadas já cacheadas de model_cache → public_works (evita retrabalho).
     2. Busca APENAS obras sem coordenadas no cache (model_cache.latitude IS NULL).
-    3. Envia endereços novos para a Geoapify batch API.
+    3. Envia endereços individualmente para a Google Maps Geocoding API.
     4. Salva resultados no model_cache (latitude, longitude).
     5. Copia novas coordenadas de model_cache → public_works.
 
@@ -354,7 +358,7 @@ def batch_geocode_works(db: Session) -> dict:
     }
 
     print(f"DEBUG: [GEOCODE] ===============================================")
-    print(f"DEBUG: [GEOCODE] INICIANDO GEOCODIFICAÇÃO EM BATCH (Geoapify)")
+    print(f"DEBUG: [GEOCODE] INICIANDO GEOCODIFICAÇÃO EM BATCH (Google Maps)")
     print(f"DEBUG: [GEOCODE] ===============================================")
 
     # ── ETAPA 0: Copia coordenadas já cacheadas de model_cache → public_works ──
@@ -403,9 +407,9 @@ def batch_geocode_works(db: Session) -> dict:
     print(f"DEBUG: [GEOCODE]   ✔ Restauradas do cache: {stats['cached_restored']}")
 
     # Verifica se a chave de API está configurada
-    api_key = settings.GEOAPIFY_API_KEY
+    api_key = settings.GOOGLE_MAPS_API_KEY
     if not api_key:
-        print(f"DEBUG: [GEOCODE] ⚠ GEOAPIFY_API_KEY não configurada.")
+        print(f"DEBUG: [GEOCODE] ⚠ GOOGLE_MAPS_API_KEY não configurada.")
         if settings.GEOCODE_FALLBACK_RANDOM:
             print(f"DEBUG: [GEOCODE]   Usando fallback aleatório para obras restantes.")
             return _fallback_all_random(db, stats)
@@ -493,46 +497,13 @@ def batch_geocode_works(db: Session) -> dict:
     unique_addresses = list(unique_addr_to_hash.keys())
     print(f"DEBUG: [GEOCODE]   Endereços únicos: {len(unique_addresses)}")
 
-    # ── ETAPA 4: Envia em lotes de BATCH_SIZE ──
+    # ── ETAPA 4: Geocodifica endereços individualmente via Google Maps API ──
     # Mapeamento global: endereço -> (lat, lon)
-    geocoded_map: dict[str, tuple[float, float]] = {}
-
-    for batch_start in range(0, len(unique_addresses), BATCH_SIZE):
-        batch = unique_addresses[batch_start:batch_start + BATCH_SIZE]
-        batch_num = (batch_start // BATCH_SIZE) + 1
-        total_batches = (len(unique_addresses) + BATCH_SIZE - 1) // BATCH_SIZE
-
-        print(f"DEBUG: [GEOCODE]   ── Lote {batch_num}/{total_batches} ({len(batch)} endereços)")
-
-        try:
-            # Cria o job
-            job_data = _create_batch_job(batch, api_key)
-            job_url = job_data.get("url", "")
-
-            if not job_url:
-                print(f"DEBUG: [GEOCODE]   ✘ Job não retornou URL. Pulando lote.")
-                stats["api_errors"] += len(batch)
-                continue
-
-            # Faz polling até completar
-            results = _poll_batch_job(job_url, api_key)
-
-            # Extrai lat/lon dos resultados
-            batch_map = _extract_lat_lon_from_results(results)
-            geocoded_map.update(batch_map)
-
-            found_in_batch = len(batch_map)
-            not_found = len(batch) - found_in_batch
-            print(
-                f"DEBUG: [GEOCODE]   ✔ Lote {batch_num}: "
-                f"{found_in_batch} encontrados, {not_found} não encontrados"
-            )
-
-        except Exception as exc:
-            print(f"DEBUG: [GEOCODE]   ✘ Erro no lote {batch_num}: {exc}")
-            stats["api_errors"] += len(batch)
-
-    print(f"DEBUG: [GEOCODE]   Total geocodificado pela API: {len(geocoded_map)}")
+    print(f"DEBUG: [GEOCODE]   ▶ Enviando {len(unique_addresses)} endereços para Google Maps API...")
+    geocoded_map = _geocode_addresses(unique_addresses, api_key)
+    found_api = len(geocoded_map)
+    not_found_api = len(unique_addresses) - found_api
+    print(f"DEBUG: [GEOCODE]   ✔ Geocodificação concluída: {found_api} encontrados, {not_found_api} não encontrados")
 
     # ── ETAPA 5: Salva resultados no model_cache E em public_works ──
     polygon = _get_municipality_polygon(db)
@@ -634,7 +605,7 @@ def _fallback_all_random(db: Session, stats: dict) -> dict:
     """
     Fallback completo: atribui coordenadas aleatórias dentro do polígono
     de Macaé para todas as obras sem coordenadas.
-    Usado quando a GEOAPIFY_API_KEY não está configurada.
+    Usado quando a GOOGLE_MAPS_API_KEY não está configurada.
 
     Args:
         db: Sessão do banco de dados.

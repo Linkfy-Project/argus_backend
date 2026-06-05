@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     # NOTA: model_cache NUNCA é afetado por FORCE_RESET.
     FORCE_RESET: bool = True
 
-    # ── Geoapify (Geocodificação em batch) ──
-    GEOAPIFY_API_KEY: str = ""
+    # ── Google Maps Geocoding API ──
+    GOOGLE_MAPS_API_KEY: str = ""
     # Limite de endereços para geocodificar (0 = sem limite, processa todos)
     # Útil para testar com um número pequeno antes de rodar tudo
     GEOCODE_LIMIT: int = 10
