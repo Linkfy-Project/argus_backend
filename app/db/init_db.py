@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import inspect, text
 
 from app.db.session import Base, engine
-from app.models.work import Alert, PublicWork
+from app.models.work import Alert, PublicWork, ModelCache
 from app.models.geo import GeoLayer
 
 
@@ -48,3 +48,4 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_columns(PublicWork)
     _ensure_columns(Alert)
+    _ensure_columns(ModelCache)

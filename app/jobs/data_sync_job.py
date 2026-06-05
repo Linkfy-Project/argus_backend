@@ -3,12 +3,14 @@ Job principal de sincronização automática dos dados públicos do ARGUS.
 
 Fluxo:
 0. (Opcional) Reset completo do banco se FORCE_RESET=true.
+   NOTA: model_cache NUNCA é excluída, mesmo com FORCE_RESET=true.
 1. Extrai dados do TCE-RJ.
 2. Extrai dados do Portal de Macaé.
 3. Importa CSVs disponíveis.
-4. Sincroniza camadas geoespaciais (município, setores, malha viária).
-5. Geocodifica obras sem coordenadas.
-6. Sincroniza IDH por setor censitário.
+4. Pipeline de IA (OpenRouter) — classifica descrições e extrai endereços.
+5. Sincroniza camadas geoespaciais (município, setores, malha viária).
+6. Geocodifica obras sem coordenadas.
+7. Sincroniza IDH por setor censitário.
 
 Cada etapa possui logs de depuração (prefixo DEBUG:) para facilitar
 o monitoramento em tempo real no terminal.
@@ -24,8 +26,9 @@ from app.db.session import SessionLocal
 from app.etl.tcerj_client import extract_tcerj
 from app.etl.macae_portal import update_macae_portal
 from app.etl.importer import import_csv
+from app.etl.ai_pipeline import run_ai_pipeline, backfill_description_hashes
 from app.etl.geo_sync import sync_geo_layers
-from app.etl.geocode import assign_random_coordinates
+from app.etl.geocode import batch_geocode_works
 from app.etl.idh_sync import sync_idh
 
 
@@ -59,22 +62,26 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
     }
 
     # ── Step 0 (opcional): Reset completo do banco ──
+    # NOTA: model_cache NUNCA é excluída, mesmo com FORCE_RESET=true,
+    # pois o processamento da IA sempre deve ser reaproveitado.
     settings = get_settings()
     if settings.FORCE_RESET:
-        print(f"DEBUG: [ARGUS JOB] ▶ Etapa 0: FORCE_RESET=true — limpando TODAS as tabelas...")
+        print(f"DEBUG: [ARGUS JOB] ▶ Etapa 0: FORCE_RESET=true — limpando TODAS as tabelas (exceto model_cache)...")
         db_reset = SessionLocal()
         try:
             # Ordem respeita foreign keys: alerts depende de public_works
+            # model_cache NUNCA é limpa — o cache de IA é preservado
             db_reset.execute(text("DELETE FROM alerts"))
             db_reset.execute(text("DELETE FROM public_works"))
             db_reset.execute(text("DELETE FROM geo_layers"))
             db_reset.commit()
             print(f"DEBUG: [ARGUS JOB]   ✔ Tabelas limpas: alerts, public_works, geo_layers")
+            print(f"DEBUG: [ARGUS JOB]   ℹ model_cache PRESERVADA (nunca é resetada)")
             result["steps"].append(
                 {
                     "step": "force_reset",
                     "status": "ok",
-                    "detail": "Todas as tabelas foram truncadas.",
+                    "detail": "Tabelas truncadas (model_cache preservada).",
                 }
             )
         except Exception as exc:
@@ -93,7 +100,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         print(f"DEBUG: [ARGUS JOB] FORCE_RESET=false — modo acumulativo (sem limpeza).")
 
     # ── Step 1: Extração TCE-RJ ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 1/6: Extraindo dados do TCE-RJ...")
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 1/7: Extraindo dados do TCE-RJ...")
     try:
         tcerj_result = extract_tcerj(municipio=municipio, ano=ano)
         result["steps"].append(
@@ -115,7 +122,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         print(f"DEBUG: [ARGUS JOB]   ✘ TCE-RJ falhou: {exc}")
 
     # ── Step 2: Extração Portal de Macaé ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 2/6: Extraindo dados do Portal de Macaé...")
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 2/7: Extraindo dados do Portal de Macaé...")
     try:
         macae_result = update_macae_portal()
         result["steps"].append(
@@ -137,7 +144,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         print(f"DEBUG: [ARGUS JOB]   ✘ Portal Macaé falhou: {exc}")
 
     # ── Step 3: Importação de CSVs ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 3/6: Importando CSVs disponíveis...")
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 3/7: Importando CSVs disponíveis...")
 
     candidate_paths = [
         "data/raw/tcerj/obras_consolidado.csv",
@@ -222,8 +229,44 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         finally:
             db.close()
 
-    # ── Step 4: Camadas geoespaciais ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 4/6: Sincronizando camadas geoespaciais...")
+    # ── Step 4: Backfill de hashes + Pipeline de IA (OpenRouter) ──
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 4/7: Backfill de hashes + Pipeline de IA...")
+    db_ai = SessionLocal()
+    try:
+        # Primeiro, garante que todos os public_works tenham description_hash
+        backfill_result = backfill_description_hashes(db_ai)
+        result["steps"].append(
+            {
+                "step": "backfill_hashes",
+                "status": backfill_result.get("status", "unknown"),
+                "result": backfill_result,
+            }
+        )
+
+        # Depois, executa a pipeline de IA (se API key configurada)
+        ai_result = run_ai_pipeline(db_ai)
+        result["steps"].append(
+            {
+                "step": "ai_pipeline",
+                "status": ai_result.get("status", "unknown"),
+                "result": ai_result,
+            }
+        )
+        print(f"DEBUG: [ARGUS JOB]   ✔ Pipeline de IA concluída: {ai_result}")
+    except Exception as exc:
+        result["steps"].append(
+            {
+                "step": "ai_pipeline",
+                "status": "error",
+                "error": str(exc),
+            }
+        )
+        print(f"DEBUG: [ARGUS JOB]   ✘ Pipeline de IA falhou: {exc}")
+    finally:
+        db_ai.close()
+
+    # ── Step 5: Camadas geoespaciais ──
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 5/7: Sincronizando camadas geoespaciais...")
     try:
         geo_result = sync_geo_layers()
         result["steps"].append(
@@ -244,10 +287,10 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         )
         print(f"DEBUG: [ARGUS JOB]   ✘ Camadas geoespaciais falharam: {exc}")
 
-    # ── Step 5: Geocodificação de obras ──
+    # ── Step 6: Geocodificação em batch (Geoapify) ──
     db = SessionLocal()
     try:
-        geo_stats = assign_random_coordinates(db)
+        geo_stats = batch_geocode_works(db)
         result["steps"].append(
             {
                 "step": "geocode_works",
@@ -266,7 +309,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
     finally:
         db.close()
 
-    # ── Step 6: Sincronização de IDH por setor censitário ──
+    # ── Step 7: Sincronização de IDH por setor censitário ──
     db = SessionLocal()
     try:
         idh_stats = sync_idh(db)

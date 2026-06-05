@@ -12,7 +12,31 @@ class Settings(BaseSettings):
     # Quando True, limpa TODOS os registros de TODAS as tabelas antes de rodar
     # o sync job. Útil após alterações na lógica de filtros, scoring, etc.
     # Deve ser False no dia a dia (comportamento acumulativo normal).
+    # NOTA: model_cache NUNCA é afetado por FORCE_RESET.
     FORCE_RESET: bool = True
+
+    # ── Geoapify (Geocodificação em batch) ──
+    GEOAPIFY_API_KEY: str = ""
+    # Limite de endereços para geocodificar (0 = sem limite, processa todos)
+    # Útil para testar com um número pequeno antes de rodar tudo
+    GEOCODE_LIMIT: int = 10
+    # Quando True, endereços que a API não conseguir geocodificar recebem
+    # coordenadas aleatórias dentro do polígono de Macaé (fallback).
+    # Quando False, esses endereços são apenas ignorados (sem coordenadas).
+    GEOCODE_FALLBACK_RANDOM: bool = False
+
+    # ── OpenRouter (Pipeline de IA) ──
+    OPENROUTER_API_KEY: str = ""
+    OPENROUTER_MODEL_ID: str = "openai/gpt-oss-120b"
+    OPENROUTER_PROVIDER: str = "Groq"
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    # Número máximo de workers paralelos para chamadas ao modelo
+    AI_PIPELINE_MAX_WORKERS: int = 4
+    # Timeout em segundos para cada chamada ao modelo
+    AI_PIPELINE_TIMEOUT: int = 60
+    # Limite de descrições para processar (0 = sem limite, processa todas)
+    # Útil para testar com um número pequeno antes de rodar tudo
+    AI_PIPELINE_LIMIT: int = 10
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
