@@ -2,11 +2,13 @@
 Job principal de sincronização automática dos dados públicos do ARGUS.
 
 Fluxo:
+0. (Opcional) Reset completo do banco se FORCE_RESET=true.
 1. Extrai dados do TCE-RJ.
 2. Extrai dados do Portal de Macaé.
 3. Importa CSVs disponíveis.
 4. Sincroniza camadas geoespaciais (município, setores, malha viária).
 5. Geocodifica obras sem coordenadas.
+6. Sincroniza IDH por setor censitário.
 
 Cada etapa possui logs de depuração (prefixo DEBUG:) para facilitar
 o monitoramento em tempo real no terminal.
@@ -15,6 +17,9 @@ o monitoramento em tempo real no terminal.
 from datetime import datetime
 from pathlib import Path
 
+from sqlalchemy import text
+
+from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.etl.tcerj_client import extract_tcerj
 from app.etl.macae_portal import update_macae_portal
@@ -52,6 +57,40 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         "started_at": started_at.isoformat(),
         "steps": [],
     }
+
+    # ── Step 0 (opcional): Reset completo do banco ──
+    settings = get_settings()
+    if settings.FORCE_RESET:
+        print(f"DEBUG: [ARGUS JOB] ▶ Etapa 0: FORCE_RESET=true — limpando TODAS as tabelas...")
+        db_reset = SessionLocal()
+        try:
+            # Ordem respeita foreign keys: alerts depende de public_works
+            db_reset.execute(text("DELETE FROM alerts"))
+            db_reset.execute(text("DELETE FROM public_works"))
+            db_reset.execute(text("DELETE FROM geo_layers"))
+            db_reset.commit()
+            print(f"DEBUG: [ARGUS JOB]   ✔ Tabelas limpas: alerts, public_works, geo_layers")
+            result["steps"].append(
+                {
+                    "step": "force_reset",
+                    "status": "ok",
+                    "detail": "Todas as tabelas foram truncadas.",
+                }
+            )
+        except Exception as exc:
+            db_reset.rollback()
+            print(f"DEBUG: [ARGUS JOB]   ✘ Erro ao limpar tabelas: {exc}")
+            result["steps"].append(
+                {
+                    "step": "force_reset",
+                    "status": "error",
+                    "error": str(exc),
+                }
+            )
+        finally:
+            db_reset.close()
+    else:
+        print(f"DEBUG: [ARGUS JOB] FORCE_RESET=false — modo acumulativo (sem limpeza).")
 
     # ── Step 1: Extração TCE-RJ ──
     print(f"DEBUG: [ARGUS JOB] ▶ Etapa 1/6: Extraindo dados do TCE-RJ...")
