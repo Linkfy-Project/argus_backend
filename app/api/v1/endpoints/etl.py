@@ -81,3 +81,48 @@ def sync_status():
     """
 
     return get_next_sync_info()
+
+
+@router.get("/sinapi/benchmarks")
+def get_sinapi_benchmarks():
+    """Retorna as tabelas de referência SINAPI usadas pelo sistema."""
+    from app.etl.sinapi_benchmark import SINAPI_BENCHMARKS
+    return {
+        "source": "SINAPI/CEF/IBGE",
+        "region": "RJ/Sudeste",
+        "reference_date": "2026-01",
+        "benchmarks": SINAPI_BENCHMARKS,
+    }
+
+
+@router.get("/inflation/ipca")
+def get_ipca_index():
+    """Retorna os números-índice do IPCA acumulados desde 2018."""
+    from app.etl.inflation import fetch_ipca_series, build_ipca_index
+    series = fetch_ipca_series()
+    index = build_ipca_index(series)
+    return {"source": "BCB/IBGE", "series": "IPCA (SGS 433)", "index": index}
+
+
+@router.get("/inflation/test-correction")
+def test_inflation_correction(
+    value: float = Query(1000000.0, description="Valor a ser corrigido"),
+    source_date: str = Query("2018-01-01", description="Data de origem (YYYY-MM-DD)"),
+):
+    """Testa a correção inflacionária de um valor."""
+    from datetime import date as date_type
+    from app.etl.inflation import correct_value
+
+    try:
+        dt = date_type.fromisoformat(source_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Data inválida: {source_date}")
+
+    corrected = correct_value(value=value, source_date=dt, target_date=date_type.today())
+    return {
+        "original_value": value,
+        "source_date": source_date,
+        "target_date": str(date_type.today()),
+        "corrected_value": round(corrected, 2),
+        "correction_factor": round(corrected / value, 6) if value else None,
+    }

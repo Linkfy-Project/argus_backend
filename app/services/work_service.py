@@ -152,6 +152,7 @@ def recompute_work(db: Session, work_id: int):
     score = calculate_score(
         work,
         contractor_recurrence=recurrence,
+        benchmark_cost_m2=work.benchmark_cost_m2,
         risk_delay_probability=risks["delay_probability"],
         risk_cost_probability=risks["cost_overrun_probability"],
         risk_rework_probability=risks["rework_probability"],
@@ -275,6 +276,7 @@ def recompute_many(
         score = calculate_score(
             work,
             contractor_recurrence=recurrence,
+            benchmark_cost_m2=work.benchmark_cost_m2,
             risk_delay_probability=risks["delay_probability"],
             risk_cost_probability=risks["cost_overrun_probability"],
             risk_rework_probability=risks["rework_probability"],

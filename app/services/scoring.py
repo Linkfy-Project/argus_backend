@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.work import PublicWork
+from app.core.config import get_settings
 
 # Pesos v2 — com ML Risk Score integrado (15% redistribuído dos outros pilares)
 WEIGHTS = {
@@ -155,6 +156,32 @@ def calculate_cost_score(work: PublicWork, benchmark_cost_m2: float | None = Non
     if benchmark and benchmark > 0 and area_m2 and area_m2 > 0:
         reference_cost = benchmark * area_m2
 
+    # ── Aplicação de correção inflacionária (IPCA) ────────────────────
+    # Se a obra tem signed_at de um ano anterior e a correção está habilitada,
+    # corrige o real_cost para a data atual antes de comparar com o benchmark.
+    # A correção é aplicada apenas para COMPARAÇÃO — o valor original não é alterado.
+    original_real_cost = real_cost  # Preserva o valor original para logging
+    inflation_applied = False
+    inflation_factor = 1.0
+
+    settings = get_settings()
+    if settings.INFLATION_ENABLED and real_cost is not None and work.signed_at is not None:
+        try:
+            from app.etl.inflation import correct_value_cached
+            corrected = correct_value_cached(
+                value=real_cost,
+                source_date=work.signed_at,
+                target_date=date.today(),
+            )
+            if corrected != real_cost:
+                inflation_factor = corrected / real_cost if real_cost else 1.0
+                real_cost = corrected
+                inflation_applied = True
+                print(f"DEBUG: [INFLATION] Obra ID={work.id}: R$ {original_real_cost:,.2f} "
+                      f"({work.signed_at}) -> R$ {real_cost:,.2f} (fator: {inflation_factor:.6f})")
+        except Exception as e:
+            print(f"DEBUG: [INFLATION] ERRO ao corrigir obra ID={work.id}: {e} — usando valor original")
+
     # ── Estratégia 1: Benchmark SINAPI disponível ──────────────────────
     if real_cost is not None and reference_cost is not None and reference_cost > 0:
         deviation = (real_cost - reference_cost) / reference_cost
@@ -167,15 +194,20 @@ def calculate_cost_score(work: PublicWork, benchmark_cost_m2: float | None = Non
         elif deviation > 0:
             _add_alert(alerts, "WARNING_CUSTO", "warning", "Desvio de custo acima do benchmark SINAPI.", {"deviation_ratio": deviation})
 
-        return score, {
+        result_details = {
             "real_cost": real_cost,
+            "original_real_cost": original_real_cost,
             "reference_cost": reference_cost,
             "benchmark_cost_m2": benchmark,
             "area_m2": area_m2,
             "deviation_ratio": deviation,
             "strategy": "benchmark_sinapi",
             "formula": "max(0, 100 - ((Custo Real - Custo Referencia) / Custo Referencia) * 100)",
-        }, alerts
+            "inflation_applied": inflation_applied,
+            "inflation_factor": inflation_factor,
+            "signed_at": str(work.signed_at) if work.signed_at else None,
+        }
+        return score, result_details, alerts
 
     # ── Estratégia 2: Heurística sem benchmark (proxy de risco financeiro) ──
     # Usa dados disponíveis: committed vs settled, additive ratio, contract_value.

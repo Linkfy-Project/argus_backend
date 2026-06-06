@@ -7,11 +7,13 @@ Fluxo:
 1. Extrai dados do TCE-RJ.
 2. Extrai dados do Portal de Macaé.
 3. Importa CSVs disponíveis.
-4. Pipeline de IA (OpenRouter) — classifica descrições e extrai endereços.
-5. Sincroniza camadas geoespaciais (município, setores, malha viária).
-6. Geocodifica obras sem coordenadas.
-7. Sincroniza IDH por setor censitário.
-8. Calcula sobreposição territorial (buffer por raio).
+4. Aplica benchmarks SINAPI (preenche benchmark_cost_m2 por tipo de obra).
+5. Estimativa de infrações CREA via proxy (TCE-RJ + CGU CEIS/CNEP).
+6. Pipeline de IA (OpenRouter) — classifica descrições e extrai endereços.
+7. Sincroniza camadas geoespaciais (município, setores, malha viária).
+8. Geocodifica obras sem coordenadas.
+9. Sincroniza IDH por setor censitário.
+10. Calcula sobreposição territorial (buffer por raio).
 
 Cada etapa possui logs de depuração (prefixo DEBUG:) para facilitar
 o monitoramento em tempo real no terminal.
@@ -32,6 +34,8 @@ from app.etl.geo_sync import sync_geo_layers
 from app.etl.geocode import batch_geocode_works
 from app.etl.idh_sync import sync_idh
 from app.etl.overlap import calculate_territorial_overlaps
+from app.etl.sinapi_benchmark import apply_sinapi_benchmarks
+from app.etl.crea_proxy import sync_crea_proxy
 
 
 def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> dict:
@@ -102,7 +106,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         print(f"DEBUG: [ARGUS JOB] FORCE_RESET=false — modo acumulativo (sem limpeza).")
 
     # ── Step 1: Extração TCE-RJ ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 1/8: Extraindo dados do TCE-RJ...")
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 1/10: Extraindo dados do TCE-RJ...")
     try:
         tcerj_result = extract_tcerj(municipio=municipio, ano=ano)
         result["steps"].append(
@@ -124,7 +128,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         print(f"DEBUG: [ARGUS JOB]   ✘ TCE-RJ falhou: {exc}")
 
     # ── Step 2: Extração Portal de Macaé ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 2/8: Extraindo dados do Portal de Macaé...")
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 2/10: Extraindo dados do Portal de Macaé...")
     try:
         macae_result = update_macae_portal()
         result["steps"].append(
@@ -146,7 +150,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         print(f"DEBUG: [ARGUS JOB]   ✘ Portal Macaé falhou: {exc}")
 
     # ── Step 3: Importação de CSVs ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 3/8: Importando CSVs disponíveis...")
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 3/10: Importando CSVs disponíveis...")
 
     candidate_paths = [
         "data/raw/tcerj/obras_consolidado.csv",
@@ -231,8 +235,69 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         finally:
             db.close()
 
-    # ── Step 4: Backfill de hashes + Pipeline de IA (OpenRouter) ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 4/8: Backfill de hashes + Pipeline de IA...")
+    # ── Step 4: Aplicar benchmarks SINAPI ──
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 4/10: Aplicando benchmarks SINAPI (custo/m² de referência)...")
+    db_sinapi = SessionLocal()
+    try:
+        sinapi_result = apply_sinapi_benchmarks(db_sinapi)
+        result["steps"].append(
+            {
+                "step": "sinapi_benchmarks",
+                "status": "ok",
+                "result": sinapi_result,
+            }
+        )
+        print(f"DEBUG: [ARGUS JOB]   ✔ Benchmarks SINAPI concluídos: {sinapi_result}")
+    except Exception as exc:
+        result["steps"].append(
+            {
+                "step": "sinapi_benchmarks",
+                "status": "error",
+                "error": str(exc),
+            }
+        )
+        print(f"DEBUG: [ARGUS JOB]   ✘ Benchmarks SINAPI falharam: {exc}")
+    finally:
+        db_sinapi.close()
+
+    # ── Step 5: Estimativa de infrações CREA via proxy (TCE-RJ + CGU) ──
+    settings_crea = get_settings()
+    if settings_crea.CREA_PROXY_ENABLED:
+        print(f"DEBUG: [ARGUS JOB] ▶ Etapa 5/10: Estimativa de infrações CREA via proxy...")
+        db_crea = SessionLocal()
+        try:
+            crea_result = sync_crea_proxy(db_crea)
+            result["steps"].append(
+                {
+                    "step": "crea_proxy",
+                    "status": "ok",
+                    "result": crea_result,
+                }
+            )
+            print(f"DEBUG: [ARGUS JOB]   ✔ CREA proxy concluído: {crea_result}")
+        except Exception as exc:
+            result["steps"].append(
+                {
+                    "step": "crea_proxy",
+                    "status": "error",
+                    "error": str(exc),
+                }
+            )
+            print(f"DEBUG: [ARGUS JOB]   ✘ CREA proxy falhou: {exc}")
+        finally:
+            db_crea.close()
+    else:
+        print(f"DEBUG: [ARGUS JOB] ▶ Etapa 5/10: CREA proxy DESABILITADO (CREA_PROXY_ENABLED=false), pulando...")
+        result["steps"].append(
+            {
+                "step": "crea_proxy",
+                "status": "skipped",
+                "reason": "CREA_PROXY_ENABLED=false",
+            }
+        )
+
+    # ── Step 6: Backfill de hashes + Pipeline de IA (OpenRouter) ──
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 6/10: Backfill de hashes + Pipeline de IA...")
     db_ai = SessionLocal()
     try:
         # Primeiro, garante que todos os public_works tenham description_hash
@@ -267,8 +332,8 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
     finally:
         db_ai.close()
 
-    # ── Step 5: Camadas geoespaciais ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 5/8: Sincronizando camadas geoespaciais...")
+    # ── Step 7: Camadas geoespaciais ──
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 7/10: Sincronizando camadas geoespaciais...")
     try:
         geo_result = sync_geo_layers()
         result["steps"].append(
@@ -289,8 +354,8 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         )
         print(f"DEBUG: [ARGUS JOB]   ✘ Camadas geoespaciais falharam: {exc}")
 
-    # ── Step 6: Geocodificação em batch (Google Maps) ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 6/8: Geocodificação em batch...")
+    # ── Step 8: Geocodificação em batch (Google Maps) ──
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 8/10: Geocodificação em batch...")
     db = SessionLocal()
     try:
         geo_stats = batch_geocode_works(db)
@@ -314,8 +379,8 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
     finally:
         db.close()
 
-    # ── Step 7: Sincronização de IDH por setor censitário ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 7/8: Sincronizando IDH por setor censitário...")
+    # ── Step 9: Sincronização de IDH por setor censitário ──
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 9/10: Sincronizando IDH por setor censitário...")
     db = SessionLocal()
     try:
         idh_stats = sync_idh(db)
@@ -339,8 +404,8 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
     finally:
         db.close()
 
-    # ── Step 8: Sobreposição territorial (buffer por raio) ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 8/8: Calculando sobreposição territorial...")
+    # ── Step 10: Sobreposição territorial (buffer por raio) ──
+    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 10/10: Calculando sobreposição territorial...")
     db = SessionLocal()
     try:
         overlap_stats = calculate_territorial_overlaps(db)
