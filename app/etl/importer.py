@@ -13,6 +13,7 @@ from datetime import date, datetime
 from pathlib import Path
 import math
 import re
+import unicodedata
 import warnings
 
 import pandas as pd
@@ -378,6 +379,54 @@ def clean_str(value) -> str | None:
     return text
 
 
+# ──────────────────────────────────────────────
+# Normalização de nomes de municípios
+# ──────────────────────────────────────────────
+
+# Mapeamento canônico de variações de nomes de municípios para o formato padrão
+_CANONICAL_MUNICIPIOS: dict[str, str] = {
+    "macae": "Macaé",
+    "macaé": "Macaé",
+    "macae-rj": "Macaé",
+    "macae/rj": "Macaé",
+}
+
+
+def normalize_municipio_name(raw: str | None, default: str = "Macae") -> str:
+    """
+    Normaliza nome de município para formato canônico.
+
+    Remove acentos temporariamente para comparação case-insensitive,
+    aplica mapeamento canônico e retorna o nome padronizado.
+
+    Args:
+        raw: Nome bruto do município (pode ser None ou vazio).
+        default: Valor padrão caso raw seja None/vazio.
+
+    Returns:
+        Nome do município normalizado no formato canônico (ex: "Macaé").
+    """
+    if not raw:
+        print(f"DEBUG: normalize_municipio_name - valor vazio, usando default='{default}'")
+        return default
+
+    # Remove acentos para comparação
+    cleaned = unicodedata.normalize("NFD", raw)
+    cleaned = "".join(c for c in cleaned if unicodedata.category(c) != "Mn")
+    cleaned = cleaned.strip().lower()
+
+    # Tenta encontrar no mapeamento canônico
+    canonical = _CANONICAL_MUNICIPIOS.get(cleaned)
+    if canonical:
+        print(f"DEBUG: normalize_municipio_name - '{raw}' -> '{canonical}' (via mapeamento canônico)")
+        return canonical
+
+    # Se não encontrou no mapeamento, retorna com title case
+    result = raw.strip().title()
+    print(f"DEBUG: normalize_municipio_name - '{raw}' -> '{result}' (via title case)")
+    return result
+
+
 def clean_float(value) -> float | None:
     value = clean_value(value)
 
@@ -681,7 +730,7 @@ def row_to_payload(row: dict, default_municipio: str = "Macae") -> dict:
     payload = {
         "external_id": external_id,
         "source": source_clean,
-        "municipio": clean_str(municipio) or default_municipio,
+        "municipio": normalize_municipio_name(municipio, default_municipio),
         "object_description": object_description or "",
         "contractor_name": clean_str(contractor),
         "contractor_document": contractor_document_clean,

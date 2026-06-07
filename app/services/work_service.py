@@ -1,11 +1,41 @@
+"""
+Serviço de obras públicas do ARGUS.
+
+Responsável por CRUD de obras, filtros, paginação e recálculo de scores.
+Inclui normalização de nomes de municípios nos filtros para garantir
+que buscas como "macae" encontrem tanto "Macae" quanto "Macaé".
+"""
+
 from __future__ import annotations
 from datetime import date, datetime
+import unicodedata
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
 from app.models.work import PublicWork, Alert
 from app.schemas.work import WorkCreate
 from app.services.scoring import calculate_score, delay_days, calculate_contractor_crea_totals
 from app.services.ml_service import predict_risks
+
+
+def _normalize_municipio_for_filter(raw: str) -> str:
+    """
+    Normaliza o termo de busca de município para comparação case-insensitive.
+
+    Remove acentos do termo de busca para que "macae" encontre "Macaé" e vice-versa.
+    Usado nos filtros ilike do banco de dados.
+
+    Args:
+        raw: Termo de busca informado pelo usuário.
+
+    Returns:
+        Termo normalizado sem acentos e em lowercase.
+    """
+    if not raw:
+        return raw
+    # Remove acentos para comparação
+    cleaned = unicodedata.normalize("NFD", raw)
+    cleaned = "".join(c for c in cleaned if unicodedata.category(c) != "Mn")
+    return cleaned.strip().lower()
 
 
 def list_works(
@@ -28,7 +58,13 @@ def list_works(
 
     # ── Filtros ──────────────────────────────────────────────
     if municipio:
-        q = q.filter(PublicWork.municipio.ilike(f"%{municipio}%"))
+        # Normaliza o termo de busca para incluir variações com/sem acento.
+        # Usa a função SQL unaccent() (registrada no SQLite) para remover
+        # acentos de AMBOS os lados da comparação.
+        # Exemplo: busca "macae" encontra "Macaé", "Macae", "macae", etc.
+        normalized = _normalize_municipio_for_filter(municipio)
+        print(f"DEBUG: list_works - filtro municipio='{municipio}' normalizado='{normalized}'")
+        q = q.filter(func.unaccent(PublicWork.municipio).ilike(f"%{normalized}%"))
 
     if min_score is not None:
         q = q.filter(PublicWork.efficiency_score >= min_score)
@@ -42,10 +78,11 @@ def list_works(
 
     if search:
         term = f"%{search}%"
+        normalized_search = _normalize_municipio_for_filter(search)
         q = q.filter(
             or_(
                 PublicWork.object_description.ilike(term),
-                PublicWork.municipio.ilike(term),
+                func.unaccent(PublicWork.municipio).ilike(f"%{normalized_search}%"),
                 PublicWork.contractor_name.ilike(term),
             )
         )

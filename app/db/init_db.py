@@ -1,3 +1,10 @@
+"""
+Script de inicialização e migração do banco de dados do ARGUS.
+
+Responsável por criar tabelas, adicionar colunas novas em bancos existentes
+e executar migrações de dados (como normalização de nomes de municípios).
+"""
+
 from __future__ import annotations
 
 from sqlalchemy import inspect, text
@@ -44,8 +51,52 @@ def _ensure_columns(table_model) -> None:
             conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col.name} {_sql_type(col)}{default_sql}"))
 
 
+def _normalize_municipios_existing() -> None:
+    """
+    Migração de dados: corrige variações de nomes de municípios já existentes no banco.
+
+    Atualiza registros com variações como "macae", "macae-rj", "macae/rj" para o
+    formato canônico "Macaé". Executado de forma idempotente (seguro para rodar
+    múltiplas vezes sem efeitos colaterais).
+
+    NOTA: Usa UPPER(TRIM(...)) para compatibilidade com SQLite e PostgreSQL.
+    """
+    inspector = inspect(engine)
+    if "public_works" not in inspector.get_table_names():
+        print("DEBUG: init_db - tabela public_works não existe, pulando migração de municípios")
+        return
+
+    # Verifica se a coluna municipio existe
+    existing_cols = {col["name"] for col in inspector.get_columns("public_works")}
+    if "municipio" not in existing_cols:
+        print("DEBUG: init_db - coluna municipio não existe, pulando migração de municípios")
+        return
+
+    # Variações conhecidas de "Macae" que devem ser normalizadas para "Macaé"
+    # Usa LOWER + REPLACE para remover acentos e comparar case-insensitive
+    variations = ["macae", "macae-rj", "macae/rj", "macaé", "macae "]
+
+    with engine.begin() as conn:
+        for variation in variations:
+            # Conta quantos registros serão afetados antes de atualizar
+            count_result = conn.execute(
+                text("SELECT COUNT(*) FROM public_works WHERE LOWER(TRIM(municipio)) = :var"),
+                {"var": variation.lower().strip()},
+            ).scalar()
+
+            if count_result and count_result > 0:
+                print(f"DEBUG: init_db - normalizando {count_result} registros com municipio='{variation}' -> 'Macaé'")
+                conn.execute(
+                    text("UPDATE public_works SET municipio = 'Macaé' WHERE LOWER(TRIM(municipio)) = :var"),
+                    {"var": variation.lower().strip()},
+                )
+
+    print("DEBUG: init_db - migração de normalização de municípios concluída")
+
+
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_columns(PublicWork)
     _ensure_columns(Alert)
     _ensure_columns(ModelCache)
+    _normalize_municipios_existing()
