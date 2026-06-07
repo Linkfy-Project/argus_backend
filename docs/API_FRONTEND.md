@@ -19,11 +19,211 @@ Base URL local: `http://localhost:8000`
 - `GET /api/v1/exports/works.csv` — exportação CSV.
 - `GET /api/v1/exports/works.xlsx` — exportação Excel.
 
+## Dashboard Executivo (NOVO)
+
+Endpoints que retornam dados prontos para o painel executivo, sem necessidade de cálculo no navegador.
+
+### Resumo Executivo
+
+```
+GET /api/v1/dashboard/summary?municipio=Macae
+```
+
+Retorna todos os KPIs do painel: obras monitoradas, valores financeiros, contagem por faixa de risco, alertas, indicadores de qualidade dos dados e score médio.
+
+| Parâmetro | Tipo | Padrão | Descrição |
+|---|---|---|---|
+| `municipio` | string | `Macae` | Nome do município (aceita com/sem acento) |
+
+**Faixas de risco:**
+- `Eficiente`: score 80-100
+- `Atenção`: score 60-79
+- `Alto risco`: score 40-59
+- `Crítico`: score 0-39
+
+### Fila Priorizada de Obras
+
+```
+GET /api/v1/dashboard/priority-queue?municipio=Macae&limit=10
+```
+
+Retorna as obras que o gestor deve avaliar primeiro, com motivo principal, ação sugerida e valor em risco estimado.
+
+| Parâmetro | Tipo | Padrão | Descrição |
+|---|---|---|---|
+| `municipio` | string | `Macae` | Nome do município |
+| `limit` | integer | `10` | Máximo de obras na fila (1-100) |
+
+### Distribuição de Risco
+
+```
+GET /api/v1/dashboard/risk-distribution?municipio=Macae
+```
+
+Retorna contagem de obras por faixa de risco para gráficos de pizza/barras.
+
+### Ranking de Bairros
+
+```
+GET /api/v1/dashboard/top-neighborhoods-risk?municipio=Macae&limit=10
+```
+
+Retorna bairros ordenados por score médio crescente (pior primeiro), com recomendações de ação.
+
+| Parâmetro | Tipo | Padrão | Descrição |
+|---|---|---|---|
+| `municipio` | string | `Macae` | Nome do município |
+| `limit` | integer | `10` | Máximo de bairros (1-50) |
+
+### Ranking de Fornecedores
+
+```
+GET /api/v1/dashboard/top-suppliers-risk?municipio=Macae&limit=10
+```
+
+Retorna fornecedores ordenados por score médio crescente (pior primeiro), com percentual médio de aditivos e recomendações.
+
+| Parâmetro | Tipo | Padrão | Descrição |
+|---|---|---|---|
+| `municipio` | string | `Macae` | Nome do município |
+| `limit` | integer | `10` | Máximo de fornecedores (1-50) |
+
+## Análise Microterritorial de Macaé-RJ (NOVO)
+
+Endpoints que retornam dados prontos para a página "Análise Macaé-RJ" do frontend,
+sem necessidade de agregações complexas no browser.
+
+### Visão Geral Territorial
+
+```
+GET /api/v1/territory/macae/overview
+```
+
+Retorna a visão geral da análise microterritorial: bairros monitorados, obras, valor total contratado, score médio, bairros críticos, obras sem bairro/geolocalização, bairro mais crítico, bairro com maior valor, bairro com mais atrasos e recomendações territoriais.
+
+**Resposta:**
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `municipio` | string | Nome canônico do município |
+| `bairros_monitorados` | int | Quantidade de bairros distintos |
+| `obras_monitoradas` | int | Total de obras |
+| `valor_total_contratado` | float | Soma de contract_value |
+| `score_medio` | float | Média de efficiency_score |
+| `bairros_criticos` | int | Bairros com score médio < 40 |
+| `obras_sem_bairro` | int | Obras com neighborhood nulo/vazio |
+| `obras_sem_geolocalizacao` | int | Obras sem latitude/longitude |
+| `bairro_mais_critico` | string | Bairro com menor score médio |
+| `bairro_maior_valor` | string | Bairro com maior valor contratado |
+| `bairro_mais_atrasos` | string | Bairro com mais obras atrasadas |
+| `recomendacoes` | string[] | Lista de recomendações territoriais |
+
+### Lista de Bairros
+
+```
+GET /api/v1/territory/macae/neighborhoods
+```
+
+Retorna lista de bairros com indicadores agregados de risco, ordenada por maior risco (score menor, mais obras críticas, mais alertas críticos, maior valor).
+
+**Resposta (cada item):**
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `bairro` | string | Nome do bairro |
+| `obras` | int | Quantidade de obras |
+| `valor_total` | float | Valor total contratado |
+| `valor_pago` | float | Valor total pago |
+| `score_medio` | float | Score médio das obras |
+| `obras_criticas` | int | Obras com score 0-39 |
+| `obras_alto_risco` | int | Obras com score 40-59 |
+| `obras_atrasadas` | int | Obras atrasadas |
+| `alertas_totais` | int | Total de alertas |
+| `alertas_criticos` | int | Alertas severity=critical |
+| `fornecedores_distintos` | int | Fornecedores únicos |
+| `fornecedor_mais_recorrente` | string | Fornecedor com mais obras |
+| `obras_sem_geolocalizacao` | int | Obras sem coordenadas |
+| `classificacao` | string | Crítico / Alto risco / Atenção / Eficiente |
+| `recomendacao` | string | Recomendação de ação |
+
+### Detalhe do Bairro
+
+```
+GET /api/v1/territory/macae/neighborhoods/{bairro}
+```
+
+Retorna detalhe completo de um bairro: resumo numérico, obras críticas, obras atrasadas, principais fornecedores, alertas, análise textual automática e ações recomendadas.
+
+**Parâmetro de rota:** `bairro` — nome do bairro (ex: `Lagomar`)
+
+**Resposta:**
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `bairro` | string | Nome do bairro |
+| `resumo` | object | Resumo numérico (obras, valores, scores, classificação) |
+| `obras_criticas` | array | Lista de obras com score 0-39 |
+| `obras_atrasadas` | array | Lista de obras atrasadas |
+| `principais_fornecedores` | array | Top 5 fornecedores do bairro |
+| `alertas` | array | Alertas recentes do bairro |
+| `analise_textual` | string | Análise textual automática |
+| `acoes_recomendadas` | string[] | Ações recomendadas para o gestor |
+
+### Heatmap Territorial
+
+```
+GET /api/v1/territory/macae/heatmap
+```
+
+Retorna FeatureCollection GeoJSON com obras georreferenciadas. Cada feature inclui propriedades de risco.
+
+**Resposta (cada feature):**
+
+| Propriedade | Tipo | Descrição |
+|---|---|---|
+| `obra_id` | int | ID da obra |
+| `nome` | string | Descrição resumida |
+| `bairro` | string | Bairro da obra |
+| `score` | float/null | Score ARGUS |
+| `classificacao` | string | Classificação de risco |
+| `valor_contratado` | float | Valor do contrato |
+| `alertas` | int | Quantidade de alertas |
+| `dias_atraso` | int | Dias de atraso |
+| `fornecedor` | string | Nome do fornecedor |
+
+### Qualidade dos Dados Territoriais
+
+```
+GET /api/v1/territory/macae/data-quality
+```
+
+Retorna relatório de qualidade dos dados: total de obras, obras sem bairro, sem geolocalização, sem valor, sem fornecedor, sem prazo, score de qualidade (0-100) e lista de obras que precisam saneamento cadastral.
+
+**Resposta:**
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `total_obras` | int | Total de obras |
+| `obras_sem_bairro` | int | Obras sem neighborhood |
+| `obras_sem_geolocalizacao` | int | Obras sem latitude/longitude |
+| `obras_sem_valor` | int | Obras sem contract_value |
+| `obras_sem_fornecedor` | int | Obras sem contractor_name |
+| `obras_sem_prazo` | int | Obras sem due_at |
+| `data_quality_score` | float | Score de qualidade (0-100) |
+| `obras_para_saneamento` | array | Obras com problemas listados |
+
 ## Fluxo recomendado para demo
 
 1. Rodar API.
 2. Popular dados demo com `python scripts/seed_demo.py`.
-3. Consumir `/api/v1/analytics/summary`, `/api/v1/works` e `/api/v1/analytics/map/geojson` no React.
+3. Consumir `/api/v1/dashboard/summary` para o painel executivo.
+4. Consumir `/api/v1/dashboard/priority-queue` para a fila de prioridades.
+5. Consumir `/api/v1/dashboard/risk-distribution` para gráficos de risco.
+6. Consumir `/api/v1/territory/macae/overview` para a visão territorial.
+7. Consumir `/api/v1/territory/macae/neighborhoods` para ranking de bairros.
+8. Consumir `/api/v1/territory/macae/heatmap` para o mapa de calor.
+9. Consumir `/api/v1/works` para listagem detalhada.
+10. Consumir `/api/v1/analytics/map/geojson` para o mapa.
 
 ## Campos úteis para cards e dashboard
 

@@ -8,6 +8,16 @@ Documentação do Render: https://argus-backend-5bio.onrender.com/docs#/
 
 ## O que foi ajustado nesta versão
 
+- **Análise Microterritorial de Macaé-RJ** (NOVO):
+  - Endpoints territoriais focados em Macaé-RJ com valor real para gestor público.
+  - `GET /api/v1/territory/macae/overview` — visão geral territorial com bairros críticos, recomendações e KPIs.
+  - `GET /api/v1/territory/macae/neighborhoods` — ranking de bairros ordenado por maior risco.
+  - `GET /api/v1/territory/macae/neighborhoods/{bairro}` — detalhe completo do bairro com obras críticas, atrasadas, fornecedores e ações recomendadas.
+  - `GET /api/v1/territory/macae/heatmap` — GeoJSON para mapa de calor com propriedades de risco.
+  - `GET /api/v1/territory/macae/data-quality` — relatório de qualidade dos dados para saneamento cadastral.
+  - Serviço: `app/services/territory_service.py`
+  - Schemas: `app/schemas/territory.py`
+  - Endpoints: `app/api/v1/endpoints/territory.py`
 - Regras do **Índice de Eficiência Composta ARGUS (IEC)** consolidadas em `app/services/scoring.py`.
 - Pesos oficiais implementados (v2 com ML Risk Score):
   - Custo Paramétrico: 25%
@@ -194,6 +204,77 @@ Auditar a memória de cálculo de uma obra:
 
 ```bash
 curl "http://localhost:8000/api/v1/works/1/score-explain"
+```
+
+### Dashboard Executivo
+
+Resumo executivo com todos os KPIs do painel:
+
+```bash
+curl "http://localhost:8000/api/v1/dashboard/summary?municipio=Macae"
+```
+
+Fila priorizada de obras (top 10 mais urgentes):
+
+```bash
+curl "http://localhost:8000/api/v1/dashboard/priority-queue?municipio=Macae&limit=10"
+```
+
+Distribuição de obras por faixa de risco:
+
+```bash
+curl "http://localhost:8000/api/v1/dashboard/risk-distribution?municipio=Macae"
+```
+
+Ranking de bairros com maior risco:
+
+```bash
+curl "http://localhost:8000/api/v1/dashboard/top-neighborhoods-risk?municipio=Macae&limit=10"
+```
+
+Ranking de fornecedores com maior risco:
+
+```bash
+curl "http://localhost:8000/api/v1/dashboard/top-suppliers-risk?municipio=Macae&limit=10"
+```
+
+Parâmetros opcionais do Dashboard:
+
+| Parâmetro | Tipo | Padrão | Descrição |
+|---|---|---|---|
+| `municipio` | string | `Macae` | Nome do município (aceita com/sem acento) |
+| `limit` | integer | `10` | Máximo de itens no ranking |
+
+### Análise Microterritorial de Macaé-RJ
+
+Visão geral territorial:
+
+```bash
+curl "http://localhost:8000/api/v1/territory/macae/overview"
+```
+
+Lista de bairros com indicadores de risco (ordenado por maior risco):
+
+```bash
+curl "http://localhost:8000/api/v1/territory/macae/neighborhoods"
+```
+
+Detalhe de um bairro específico:
+
+```bash
+curl "http://localhost:8000/api/v1/territory/macae/neighborhoods/Lagomar"
+```
+
+Heatmap GeoJSON para mapa de calor:
+
+```bash
+curl "http://localhost:8000/api/v1/territory/macae/heatmap"
+```
+
+Relatório de qualidade dos dados territoriais:
+
+```bash
+curl "http://localhost:8000/api/v1/territory/macae/data-quality"
 ```
 
 ### Analytics
