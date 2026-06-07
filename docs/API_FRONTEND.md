@@ -212,6 +212,102 @@ Retorna relatório de qualidade dos dados: total de obras, obras sem bairro, sem
 | `data_quality_score` | float | Score de qualidade (0-100) |
 | `obras_para_saneamento` | array | Obras com problemas listados |
 
+## Alertas (NOVO)
+
+Endpoints próprios para alertas, com filtros avançados e atualização de status.
+O frontend pode parar de depender exclusivamente de `worksService.listAll` para montar alertas.
+
+### Listar Alertas
+
+```
+GET /api/v1/alerts
+```
+
+Retorna lista de alertas enriquecidos com dados da obra associada.
+
+| Parâmetro | Tipo | Padrão | Descrição |
+|---|---|---|---|
+| `municipio` | string | — | Filtrar por município (normalizado, sem acento) |
+| `severity` | string | — | Filtrar por severidade (info, warning, alert, critical) |
+| `status` | string | — | Filtrar por status (Novo, Em análise, Encaminhado, Resolvido, Descartado) |
+| `tipo` | string | — | Filtrar por tipo de alerta (ex: "Atraso crítico") |
+| `bairro` | string | — | Filtrar por bairro da obra |
+| `fornecedor` | string | — | Filtrar por fornecedor/contratado |
+| `obra_id` | integer | — | Filtrar por ID da obra |
+| `search` | string | — | Busca textual em mensagem, código, descrição, município e fornecedor |
+
+**Resposta:** `AlertRead[]`
+
+### Atualizar Status do Alerta
+
+```
+PATCH /api/v1/alerts/{id}/status
+```
+
+Payload: `{ "status": "Em análise" }`
+
+Status permitidos: `Novo`, `Em análise`, `Encaminhado`, `Resolvido`, `Descartado`.
+
+## Contratos (NOVO)
+
+Endpoints próprios para contratos, derivados de obras públicas com campos calculados.
+
+### Listar Contratos
+
+```
+GET /api/v1/contracts
+```
+
+| Parâmetro | Tipo | Padrão | Descrição |
+|---|---|---|---|
+| `municipio` | string | — | Filtrar por município |
+| `fornecedor` | string | — | Filtrar por fornecedor |
+| `secretaria` | string | — | Filtrar por secretaria/unidade gestora |
+| `bairro` | string | — | Filtrar por bairro |
+| `status` | string | — | Concluída, Vencida, Vigente, Planejada |
+| `risco` | string | — | Crítico, Alto risco, Atenção, Baixo risco |
+| `com_aditivo` | boolean | — | true = com aditivo, false = sem |
+| `vencendo` | boolean | — | Vencendo nos próximos 30 dias |
+| `vencido` | boolean | — | Já vencidos |
+| `search` | string | — | Busca textual |
+
+**Resposta:** `ContractRead[]`
+
+### Detalhe do Contrato
+
+```
+GET /api/v1/contracts/{id}
+```
+
+Aceita ID numérico da obra ou formato `work-123`. Retorna detalhes incluindo alertas associados.
+
+## Fornecedores (NOVO)
+
+Endpoints próprios para ranking e detalhe de fornecedores.
+
+### Ranking de Fornecedores
+
+```
+GET /api/v1/suppliers/ranking
+```
+
+| Parâmetro | Tipo | Padrão | Descrição |
+|---|---|---|---|
+| `municipio` | string | — | Filtrar por município |
+| `bairro` | string | — | Filtrar por bairro |
+| `risco` | string | — | Eficiente, Atenção, Alto risco, Crítico |
+| `limit` | integer | 50 | Limite de resultados (1-500) |
+
+**Resposta:** `SupplierRankingRead[]` ordenado por score médio (pior primeiro).
+
+### Detalhe do Fornecedor
+
+```
+GET /api/v1/suppliers/{cnpj_or_name}
+```
+
+Aceita CNPJ ou nome do fornecedor. Retorna resumo, obras, contratos, bairros, alertas e recomendações.
+
 ## Fluxo recomendado para demo
 
 1. Rodar API.

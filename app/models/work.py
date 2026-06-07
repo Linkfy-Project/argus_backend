@@ -96,6 +96,8 @@ class Alert(Base):
     severity_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
     weighted_severity: Mapped[float] = mapped_column(Float, default=0.0)
     message: Mapped[str] = mapped_column(Text)
+    # Status do alerta: Novo, Em análise, Encaminhado, Resolvido, Descartado
+    status: Mapped[str] = mapped_column(String(40), default="Novo", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     work: Mapped[PublicWork] = relationship(back_populates="alerts")

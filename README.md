@@ -8,6 +8,18 @@ Documentação do Render: https://argus-backend-5bio.onrender.com/docs#/
 
 ## O que foi ajustado nesta versão
 
+- **APIs de Alertas, Contratos e Fornecedores** (NOVO):
+  - Endpoints próprios para alertas, contratos e fornecedores, eliminando a necessidade de derivar dados no frontend.
+  - `GET /api/v1/alerts` — lista alertas com filtros por município, severidade, status, tipo, bairro, fornecedor, obra_id e busca textual.
+  - `PATCH /api/v1/alerts/{id}/status` — atualiza status do alerta (Novo, Em análise, Encaminhado, Resolvido, Descartado).
+  - `GET /api/v1/contracts` — lista contratos derivados de obras com filtros por município, fornecedor, secretaria, bairro, status, risco, aditivos e vencimento.
+  - `GET /api/v1/contracts/{id}` — detalhe de contrato com alertas associados (aceita `work-123` ou ID numérico).
+  - `GET /api/v1/suppliers/ranking` — ranking de fornecedores ordenado por score médio com classificação de risco e recomendações.
+  - `GET /api/v1/suppliers/{cnpj_or_name}` — detalhe de fornecedor com obras, contratos, bairros e alertas.
+  - Campo `status` adicionado ao modelo `Alert` com migração leve automática.
+  - Schemas: `app/schemas/alert.py`, `app/schemas/contract.py`, `app/schemas/supplier.py`
+  - Services: `app/services/alert_service.py`, `app/services/contract_service.py`, `app/services/supplier_service.py`
+  - Endpoints: `app/api/v1/endpoints/alerts.py`, `app/api/v1/endpoints/contracts.py`, `app/api/v1/endpoints/suppliers.py`
 - **Análise Microterritorial de Macaé-RJ** (NOVO):
   - Endpoints territoriais focados em Macaé-RJ com valor real para gestor público.
   - `GET /api/v1/territory/macae/overview` — visão geral territorial com bairros críticos, recomendações e KPIs.
