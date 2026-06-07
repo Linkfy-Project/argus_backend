@@ -12,7 +12,11 @@ from sqlalchemy import func
 from app.db.session import get_db
 from app.models.work import PublicWork, Alert
 
+import logging
 import unicodedata
+
+# Logger para debug/info ao invés de print()
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -187,7 +191,7 @@ def inter_municipal(db: Session = Depends(get_db)):
             g["score_count"] += r.total
 
     # ── Monta resultado final com médias ponderadas ──
-    print(f"DEBUG: inter_municipal - {len(rows)} linhas do SQL normalizadas para {len(grouped)} municípios")
+    logger.debug("inter_municipal - %d linhas do SQL normalizadas para %d municípios", len(rows), len(grouped))
     result = []
     for municipio, g in grouped.items():
         avg_score = g["weighted_score_sum"] / g["score_count"] if g["score_count"] > 0 else 0.0

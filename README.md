@@ -9,12 +9,13 @@ Documentação do Render: https://argus-backend-5bio.onrender.com/docs#/
 ## O que foi ajustado nesta versão
 
 - Regras do **Índice de Eficiência Composta ARGUS (IEC)** consolidadas em `app/services/scoring.py`.
-- Pesos oficiais implementados:
-  - Custo Paramétrico: 30%
-  - Prazo: 25%
+- Pesos oficiais implementados (v2 com ML Risk Score):
+  - Custo Paramétrico: 25%
+  - Prazo / Cronograma: 25%
   - Qualidade Técnica e Aditivos: 20%
-  - Recorrência Territorial: 15%
-  - Impacto Socioeconômico: 10%
+  - Recorrência Territorial: 10%
+  - Impacto Socioeconômico: 5%
+  - ML Risk Score: 15%
 - Fórmulas revisadas conforme o mapeamento de regras:
   - Custo: `max(0, 100 - ((Custo Real - Custo Referência) / Custo Referência) * 100)`
   - Prazo: `max(0, 100 - (Dias de Atraso / 90) * 100)`
@@ -144,7 +145,7 @@ curl "http://localhost:8000/health"
 Listar obras:
 
 ```bash
-curl "http://localhost:8000/api/v1/works?municipio=Macae&limit=20&min_score=50&max_score=100"
+curl "http://localhost:8000/api/v1/works?municipio=Macae&page=1&per_page=20&min_score=50&max_score=100"
 ```
 
 Parâmetros opcionais:
@@ -154,8 +155,8 @@ Parâmetros opcionais:
 | `municipio` | string | — | Filtrar por município |
 | `min_score` | number | — | Score mínimo (eficiência) |
 | `max_score` | number | — | Score máximo (eficiência) |
-| `limit` | integer | `100` | Limite de resultados (máx. 500) |
-| `offset` | integer | `0` | Offset para paginação |
+| `page` | integer | `1` | Página atual (começa em 1) |
+| `per_page` | integer | `25` | Itens por página (máx. 10000) |
 
 Criar obra:
 

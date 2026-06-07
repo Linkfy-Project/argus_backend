@@ -1,9 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.db.init_db import init_db
+from app.db.session import get_db
 from app.jobs.scheduler import start_scheduler, stop_scheduler
 
 settings = get_settings()
@@ -42,10 +44,30 @@ def shutdown():
 
 @app.get("/health", tags=["health"])
 def health():
+    """
+    Endpoint de health check.
+    Inclui status do banco de dados, versão e timestamp para monitoramento
+    por load balancers e ferramentas de observabilidade.
+    """
+    from datetime import datetime, timezone
+
+    db_ok = False
+    try:
+        # Usa next(get_db()) direto para não depender de Depends()
+        # (load balancers chamam este endpoint sem contexto de dependência)
+        db = next(get_db())
+        db.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        pass
+
     return {
         "status": "ok",
         "service": settings.APP_NAME,
+        "version": app.version,
         "environment": settings.ENVIRONMENT,
+        "db_status": "ok" if db_ok else "unavailable",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 

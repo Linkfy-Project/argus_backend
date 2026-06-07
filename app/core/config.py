@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "ARGUS API"
     ENVIRONMENT: str = "development"
     DATABASE_URL: str = "sqlite:///./argus.db"
-    BACKEND_CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
+    BACKEND_CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173,https://plataforma-argus-frontend.lovable.app"
     DEFAULT_MUNICIPIO: str = "Macae"
     TCE_BASE_URL: str = "https://dados.tcerj.tc.br/api/v1"
     # Quando True, limpa TODOS os registros de TODAS as tabelas antes de rodar

@@ -5,7 +5,7 @@ Base URL local: `http://localhost:8000`
 ## Endpoints principais
 
 - `GET /health` — verifica se a API está no ar.
-- `GET /api/v1/works` — lista obras, aceita `municipio`, `min_score`, `max_score`, `limit`, `offset`.
+- `GET /api/v1/works` — lista obras paginadas, aceita `municipio`, `min_score`, `max_score`, `status`, `search`, `min_value`, `max_value`, `page`, `per_page`.
 - `GET /api/v1/works/{id}` — detalhes da obra, incluindo scores e alertas.
 - `POST /api/v1/works` — cria obra manualmente.
 - `POST /api/v1/works/{id}/recompute` — recalcula índice, alertas e risco preditivo.

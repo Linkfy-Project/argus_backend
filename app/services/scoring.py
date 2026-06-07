@@ -1,4 +1,8 @@
 from __future__ import annotations
+import logging
+
+# Logger para debug/info ao invés de print()
+logger = logging.getLogger(__name__)
 
 from dataclasses import asdict, dataclass
 from datetime import date
@@ -177,10 +181,9 @@ def calculate_cost_score(work: PublicWork, benchmark_cost_m2: float | None = Non
                 inflation_factor = corrected / real_cost if real_cost else 1.0
                 real_cost = corrected
                 inflation_applied = True
-                print(f"DEBUG: [INFLATION] Obra ID={work.id}: R$ {original_real_cost:,.2f} "
-                      f"({work.signed_at}) -> R$ {real_cost:,.2f} (fator: {inflation_factor:.6f})")
+                logger.debug("[INFLATION] Obra ID=%s: R$ %.2f (%s) -> R$ %.2f (fator: %.6f)", work.id, original_real_cost, work.signed_at, real_cost, inflation_factor)
         except Exception as e:
-            print(f"DEBUG: [INFLATION] ERRO ao corrigir obra ID={work.id}: {e} — usando valor original")
+            logger.debug("[INFLATION] ERRO ao corrigir obra ID=%s: %s — usando valor original", work.id, e)
 
     # ── Estratégia 1: Benchmark SINAPI disponível ──────────────────────
     if real_cost is not None and reference_cost is not None and reference_cost > 0:

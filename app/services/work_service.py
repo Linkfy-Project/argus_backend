@@ -8,7 +8,11 @@ que buscas como "macae" encontrem tanto "Macae" quanto "Macaé".
 
 from __future__ import annotations
 from datetime import date, datetime
+import logging
 import unicodedata
+
+# Logger para debug/info ao invés de print()
+logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
 from app.models.work import PublicWork, Alert
@@ -63,7 +67,7 @@ def list_works(
         # acentos de AMBOS os lados da comparação.
         # Exemplo: busca "macae" encontra "Macaé", "Macae", "macae", etc.
         normalized = _normalize_municipio_for_filter(municipio)
-        print(f"DEBUG: list_works - filtro municipio='{municipio}' normalizado='{normalized}'")
+        logger.debug("list_works - filtro municipio='%s' normalizado='%s'", municipio, normalized)
         q = q.filter(func.unaccent(PublicWork.municipio).ilike(f"%{normalized}%"))
 
     if min_score is not None:
@@ -250,21 +254,21 @@ def recompute_many(
         return {"updated": 0}
 
     # 1. Carregar modelo ML 1x (cache global)
-    print(f"DEBUG: [RECOMPUTE_BATCH] Carregando modelo ML (cache)...")
+    logger.debug("[RECOMPUTE_BATCH] Carregando modelo ML (cache)...")
     ml_models = get_cached_model()
 
     # 2. Buscar todas as obras de uma vez
-    print(f"DEBUG: [RECOMPUTE_BATCH] Buscando {total} obras no banco...")
+    logger.debug("[RECOMPUTE_BATCH] Buscando %d obras no banco...", total)
     works = (
         db.query(PublicWork)
         .filter(PublicWork.id.in_(work_ids))
         .all()
     )
     works_map = {w.id: w for w in works}
-    print(f"DEBUG: [RECOMPUTE_BATCH] Encontradas {len(works)} obras.")
+    logger.debug("[RECOMPUTE_BATCH] Encontradas %d obras.", len(works))
 
     # 3. Pré-computar recurrências (1 query com GROUP BY)
-    print(f"DEBUG: [RECOMPUTE_BATCH] Pré-computando recurrências...")
+    logger.debug("[RECOMPUTE_BATCH] Pré-computando recurrências...")
     docs = [w.contractor_document for w in works if w.contractor_document]
     recurrence_map: dict[str, int] = {}
     if docs:
@@ -282,7 +286,7 @@ def recompute_many(
         return recurrence_map.get(work.contractor_document, 1)
 
     # 4. Montar features para batch predict
-    print(f"DEBUG: [RECOMPUTE_BATCH] Montando features para ML...")
+    logger.debug("[RECOMPUTE_BATCH] Montando features para ML...")
     features_list = []
     works_to_update = []
 
@@ -302,11 +306,11 @@ def recompute_many(
         })
 
     # 5. Predizer riscos em batch PRIMEIRO (1 chamada numpy)
-    print(f"DEBUG: [RECOMPUTE_BATCH] Predizendo riscos em batch ({len(features_list)} obras)...")
+    logger.debug("[RECOMPUTE_BATCH] Predizendo riscos em batch (%d obras)...", len(features_list))
     risk_results = predict_risks_batch(features_list, models=ml_models)
 
     # 6. Calcular scores rule-based COM probabilidades ML integradas
-    print(f"DEBUG: [RECOMPUTE_BATCH] Calculando scores com ML integrado...")
+    logger.debug("[RECOMPUTE_BATCH] Calculando scores com ML integrado...")
     score_results = []
     for work, risks in zip(works_to_update, risk_results):
         recurrence = _get_recurrence(work)
@@ -333,11 +337,11 @@ def recompute_many(
         work.risk_rework_probability = risks["rework_probability"]
 
     # 7. Batch DELETE de alerts existentes
-    print(f"DEBUG: [RECOMPUTE_BATCH] Removendo alerts antigos em batch...")
+    logger.debug("[RECOMPUTE_BATCH] Removendo alerts antigos em batch...")
     db.query(Alert).filter(Alert.work_id.in_(work_ids)).delete(synchronize_session="fetch")
 
     # 8. Batch INSERT de novos alerts
-    print(f"DEBUG: [RECOMPUTE_BATCH] Inserindo novos alerts em batch...")
+    logger.debug("[RECOMPUTE_BATCH] Inserindo novos alerts em batch...")
     new_alerts = []
     for work, score in zip(works_to_update, score_results):
         for alert in score.alerts:
@@ -357,7 +361,7 @@ def recompute_many(
     # 9. Commit ÚNICO
     db.commit()
 
-    print(f"DEBUG: [RECOMPUTE_BATCH] Batch concluído: {total} obras processadas em 1 commit.")
+    logger.debug("[RECOMPUTE_BATCH] Batch concluído: %d obras processadas em 1 commit.", total)
     return {"updated": total}
 
 
