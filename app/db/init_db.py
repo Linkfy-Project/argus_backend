@@ -9,12 +9,14 @@ from __future__ import annotations
 
 from sqlalchemy import inspect, text
 
+from app.core.config import get_settings
 from app.db.session import Base, engine
 from app.models.work import Alert, PublicWork, ModelCache
 from app.models.geo import GeoLayer
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+settings = get_settings()
 
 
 def _sql_type(column) -> str:
@@ -98,6 +100,20 @@ def _normalize_municipios_existing() -> None:
 
 
 def init_db() -> None:
+    # Habilita extensão unaccent no PostgreSQL para buscas sem acentos.
+    # No SQLite, a função já é registrada como UDF em session.py.
+    # Sem esta extensão, qualquer filtro de município com func.unaccent()
+    # causa erro 500 no PostgreSQL (Render).
+    if not settings.DATABASE_URL.startswith("sqlite"):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS unaccent"))
+            logger.info("init_db - extensão unaccent habilitada no PostgreSQL")
+        except Exception as exc:
+            # Não impede a inicialização se a extensão já existe ou se o
+            # usuário do banco não tem permissão de CREATE EXTENSION.
+            logger.warning("init_db - não foi possível habilitar unaccent: %s", exc)
+
     Base.metadata.create_all(bind=engine)
     _ensure_columns(PublicWork)
     _ensure_columns(Alert)
