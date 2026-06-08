@@ -54,18 +54,24 @@ app.add_middleware(
 def health():
     """
     Endpoint de health check.
-    Inclui status do banco de dados, versão e timestamp para monitoramento
-    por load balancers e ferramentas de observabilidade.
+    Inclui status do banco de dados, versão, timestamp e informações
+    do sync para monitoramento por load balancers e ferramentas de observabilidade.
     """
     from datetime import datetime, timezone
 
+    from app.jobs.scheduler import get_next_sync_info
+
     db_ok = False
+    works_count = None
     try:
         # Usa next(get_db()) direto para não depender de Depends()
         # (load balancers chamam este endpoint sem contexto de dependência)
         db = next(get_db())
         db.execute(text("SELECT 1"))
         db_ok = True
+        # Conta obras para indicar se o banco está populado
+        result = db.execute(text("SELECT COUNT(*) FROM public_works")).scalar()
+        works_count = int(result) if result is not None else 0
     except Exception:
         pass
 
@@ -75,6 +81,8 @@ def health():
         "version": app.version,
         "environment": settings.ENVIRONMENT,
         "db_status": "ok" if db_ok else "unavailable",
+        "works_count": works_count,
+        "sync_info": get_next_sync_info(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 

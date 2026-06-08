@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     # Ano base para a série IPCA (data mais antiga a considerar)
     INFLATION_BASE_YEAR: int = 2018
 
+    # ── Sync no Cold Start ──
+    # Quando True, o scheduler roda o sync_public_data_job imediatamente
+    # ao iniciar a API (útil em desenvolvimento para testar o pipeline).
+    # Quando False (padrão), o sync só roda imediatamente se o banco
+    # estiver vazio. Em produção, o UptimeRobot mantém o serviço acordado
+    # e o sync roda a cada 15 dias normalmente.
+    SYNC_ON_COLD_START: bool = False
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     @property

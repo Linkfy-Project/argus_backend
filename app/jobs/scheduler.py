@@ -1,9 +1,16 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from sqlalchemy import func
 
+from app.core.config import get_settings
+from app.core.logging import get_logger
+from app.db.session import SessionLocal
 from app.jobs.data_sync_job import sync_public_data_job
+from app.models.work import PublicWork
+
+logger = get_logger(__name__)
 
 TIMEZONE = "America/Sao_Paulo"
 JOB_ID = "public_data_sync_every_15_days"
@@ -91,24 +98,73 @@ def log_next_sync_info() -> None:
     )
 
 
+def _should_run_sync_immediately() -> bool:
+    """
+    Decide se o sync deve rodar imediatamente no startup.
+
+    Regras:
+    1. Se SYNC_ON_COLD_START=True (desenvolvimento) → sempre roda.
+    2. Se o banco estiver vazio (0 obras) → roda para popular dados.
+    3. Caso contrário → NÃO roda (adiado para 15 dias).
+    """
+    settings = get_settings()
+
+    # Modo desenvolvimento: sempre roda
+    if settings.SYNC_ON_COLD_START:
+        logger.info("[ARGUS SCHEDULER] SYNC_ON_COLD_START=true — sync imediato (modo dev)")
+        return True
+
+    # Verifica se o banco tem dados
+    db = SessionLocal()
+    try:
+        count = db.query(func.count(PublicWork.id)).scalar() or 0
+        if count == 0:
+            logger.info("[ARGUS SCHEDULER] Banco vazio — sync imediato para popular dados")
+            return True
+        else:
+            logger.info(
+                "[ARGUS SCHEDULER] Banco já tem %d obras — sync adiado para 15 dias",
+                count,
+            )
+            return False
+    except Exception as exc:
+        logger.warning("[ARGUS SCHEDULER] Erro ao verificar banco: %s — sync imediato", exc)
+        return True
+    finally:
+        db.close()
+
+
 def start_scheduler() -> None:
     """
     Inicia o scheduler interno do ARGUS.
 
     Comportamento:
-    - roda uma vez imediatamente quando a API iniciar;
-    - depois roda novamente a cada 15 dias.
+    - Se SYNC_ON_COLD_START=True (dev) ou banco vazio → roda imediatamente.
+    - Senão → agenda próxima execução para daqui a 15 dias.
+    - Depois disso, repete a cada 15 dias.
     """
 
     if scheduler.running:
         log_next_sync_info()
         return
 
+    now = datetime.now(ZoneInfo(TIMEZONE))
+
+    if _should_run_sync_immediately():
+        next_run_time = now
+        print("[ARGUS SCHEDULER] Scheduler iniciado — sync será executado imediatamente.")
+    else:
+        next_run_time = now + timedelta(days=15)
+        print(
+            f"[ARGUS SCHEDULER] Scheduler iniciado — "
+            f"próximo sync em 15 dias ({next_run_time.strftime('%d/%m/%Y %H:%M')})."
+        )
+
     scheduler.add_job(
         sync_public_data_job,
         trigger="interval",
         days=15,
-        next_run_time=datetime.now(ZoneInfo(TIMEZONE)),
+        next_run_time=next_run_time,
         id=JOB_ID,
         name="Atualização quinzenal dos dados públicos do ARGUS",
         replace_existing=True,
@@ -119,10 +175,6 @@ def start_scheduler() -> None:
     )
 
     scheduler.start()
-
-    print("[ARGUS SCHEDULER] Scheduler iniciado.")
-    print("[ARGUS SCHEDULER] Primeira atualização será executada imediatamente.")
-    print("[ARGUS SCHEDULER] Depois disso, a atualização ocorrerá a cada 15 dias.")
 
     log_next_sync_info()
 
