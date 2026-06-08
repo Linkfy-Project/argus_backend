@@ -882,13 +882,23 @@ def upsert_work(db: Session, payload: dict) -> tuple[PublicWork, bool]:
     """
     Cria ou atualiza uma obra.
     Retorna: (obra, created=True/False)
+
+    CORREÇÃO: Quando a obra já existe, não sobrescreve campos que possuem
+    valor válido com None. Isso evita que coordenadas geocodificadas
+    (latitude/longitude), scores calculados e outros campos preenchidos
+    por pipelines posteriores sejam apagados quando o sync reimporta os
+    mesmos dados do CSV (que não contém esses campos).
     """
 
     existing = find_existing_work(db, payload)
 
     if existing:
         for key, value in payload.items():
-            setattr(existing, key, value)
+            # Só sobrescreve se o novo valor NÃO for None,
+            # ou se o campo existente também for None.
+            # Isso preserva coordenadas geocodificadas, scores, etc.
+            if value is not None or getattr(existing, key, None) is None:
+                setattr(existing, key, value)
 
         return existing, False
 
