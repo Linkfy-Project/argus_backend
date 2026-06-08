@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # o sync job. Útil após alterações na lógica de filtros, scoring, etc.
     # Deve ser False no dia a dia (comportamento acumulativo normal).
     # NOTA: model_cache NUNCA é afetado por FORCE_RESET.
-    FORCE_RESET: bool = False
+    FORCE_RESETT: bool = False
 
     # ── Google Maps Geocoding API ──
     GOOGLE_MAPS_API_KEY: str = ""

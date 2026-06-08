@@ -74,7 +74,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
     # NOTA: model_cache NUNCA é excluída, mesmo com FORCE_RESET=true,
     # pois o processamento da IA sempre deve ser reaproveitado.
     settings = get_settings()
-    if settings.FORCE_RESET:
+    if settings.FORCE_RESETT:
         logger.info(f"[ARGUS JOB] ▶ Etapa 0: FORCE_RESET=true — limpando TODAS as tabelas (exceto model_cache)...")
         db_reset = SessionLocal()
         try:
