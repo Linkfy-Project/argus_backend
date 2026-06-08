@@ -13,14 +13,14 @@ from sqlalchemy.orm import Session
 from app.models.work import PublicWork
 from app.core.config import get_settings
 
-# Pesos v2 — com ML Risk Score integrado (15% redistribuído dos outros pilares)
+# Pesos v3 — 5 pilares (IDH agora é agravante social, NÃO entra no somatório do score base)
+# A soma dos pesos é exatamente 1.0 (100%)
 WEIGHTS = {
-    "cost": 0.25,
-    "deadline": 0.25,
-    "quality": 0.20,
-    "recurrence": 0.10,
-    "social_impact": 0.05,
-    "ml_risk": 0.15,
+    "cost": 0.25,       # Custo Paramétrico
+    "deadline": 0.25,   # Prazo / Cronograma
+    "quality": 0.20,    # Qualidade Técnica
+    "recurrence": 0.15, # Recorrência Territorial (aumentado de 0.10)
+    "ml_risk": 0.15,    # ML Risk Score
 }
 
 CREA_PENALTIES = {
@@ -42,14 +42,21 @@ CRITICAL_IDH_MULTIPLIER = 1.5
 
 @dataclass
 class ScoreResult:
+    """Resultado do cálculo de score de uma obra pública.
+    
+    Contém os 5 pilares do score base (0-100), o score de impacto social (IDH)
+    que agora atua como agravante e NÃO entra no somatório, o efficiency_score
+    final, a lista de alertas e os componentes detalhados.
+    """
     cost_score: float
     deadline_score: float
     quality_score: float
     recurrence_score: float
-    social_impact_score: float
+    social_impact_score: float  # Mantido para exibir IDH no response, mas NÃO entra no score base
     efficiency_score: float
     alerts: list[dict]
     components: dict
+    agravante_social: dict = None  # Informações sobre o agravante social (IDH < 0.600)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -620,6 +627,28 @@ def calculate_ml_risk_score(
     return score, details
 
 
+def get_agravante_social_info(work: PublicWork) -> dict:
+    """Retorna informações sobre o agravante social para incluir no response da API.
+    
+    O agravante social é ativado quando o IDH local da obra é inferior a 0.600.
+    Nesse caso, a criticidade dos alertas é multiplicada por 1.5x.
+    
+    Args:
+        work: Obra pública com o campo idh.
+        
+    Returns:
+        Dicionário com informações do agravante_social_ativo, idh_valor, limiar e multiplicador.
+    """
+    idh = safe_float(work.idh)
+    agravante_ativo = idh is not None and idh < CRITICAL_IDH_THRESHOLD
+    return {
+        "agravante_social_ativo": agravante_ativo,
+        "idh_valor": idh,
+        "limiar": CRITICAL_IDH_THRESHOLD,
+        "multiplicador": CRITICAL_IDH_MULTIPLIER if agravante_ativo else 1.0,
+    }
+
+
 def calculate_score(
     work: PublicWork,
     contractor_recurrence: int = 1,
@@ -635,23 +664,27 @@ def calculate_score(
     """
     Calcula o Índice Composto de Eficiência ARGUS (score 0-100).
 
-    Pesos (v2 — com ML integrado):
-    - Custo Paramétrico:     25%  (era 30%)
-    - Prazo / Cronograma:    25%  (mantido)
-    - Qualidade Técnica:     20%  (mantido)
-    - Recorrência Territorial: 10% (era 15%)
-    - Impacto Socioeconômico:  5% (era 10%)
-    - ML Risk Score:          15%  (NOVO)
+    Pesos (v3 — 5 pilares, IDH é agravante social):
+    - Custo Paramétrico:       25%  (mantido)
+    - Prazo / Cronograma:      25%  (mantido)
+    - Qualidade Técnica:       20%  (mantido)
+    - Recorrência Territorial: 15%  (aumentado de 10%)
+    - ML Risk Score:           15%  (mantido)
+    
+    NOTA: O Impacto Socioeconômico (IDH) NÃO faz mais parte do somatório do
+    score base. Ele agora atua exclusivamente como Agravante Social (Multiplicador
+    de Criticidade) aplicado sobre alertas quando IDH < 0.600.
 
-    Os pesos foram redistribuídos para incorporar o ML sem alterar drasticamente
-    a escala existente.
+    Os 5 pilares restantes somam exatamente 1.0 (100%).
     """
     alerts: list[dict] = []
 
+    # 1. Calcular cada pilar individualmente
     cost_score, cost_details, cost_alerts = calculate_cost_score(work, benchmark_cost_m2=benchmark_cost_m2)
     deadline_score, deadline_details, deadline_alerts = calculate_deadline_score(work, today=today)
     quality_score, quality_details, quality_alerts = calculate_quality_score(work)
     recurrence_score, recurrence_details, recurrence_alerts = calculate_recurrence_score(work, contractor_recurrence=contractor_recurrence, overlap_ratio=overlap_ratio)
+    # social_impact_score ainda é calculado para exibir o IDH no response, mas NÃO entra no score base
     social_impact_score, social_details, social_alerts = calculate_social_impact_score(work)
     ml_risk_score, ml_details = calculate_ml_risk_score(
         risk_delay_probability=risk_delay_probability,
@@ -659,43 +692,47 @@ def calculate_score(
         risk_rework_probability=risk_rework_probability,
     )
 
-    # CREA suspicious pattern detection (Pilar 3 enhancement)
+    # 2. CREA suspicious pattern detection (Pilar 3 enhancement)
     crea_suspicious_alerts = detect_crea_suspicious_patterns(
         work,
         contractor_work_count=contractor_work_count,
         contractor_crea_total=contractor_crea_total,
     )
 
+    # 3. Agregar todos os alertas gerados pelos pilares
     for group in (cost_alerts, deadline_alerts, quality_alerts, recurrence_alerts, social_alerts, crea_suspicious_alerts):
         alerts.extend(group)
 
+    # 4. Aplicar multiplicador de criticidade social (IDH < 0.600 → 1.5x nos alertas)
     apply_social_criticality_multiplier(work, alerts)
 
-    # Pesos v2 com ML integrado
+    # 5. Pesos v3 — 5 pilares (IDH removido do somatório, recurrence aumentado)
     W = {
-        "cost": 0.25,
-        "deadline": 0.25,
-        "quality": 0.20,
-        "recurrence": 0.10,
-        "social_impact": 0.05,
-        "ml_risk": 0.15,
+        "cost": 0.25,       # Custo Paramétrico
+        "deadline": 0.25,   # Prazo / Cronograma
+        "quality": 0.20,    # Qualidade Técnica
+        "recurrence": 0.15, # Recorrência Territorial (aumentado de 0.10)
+        "ml_risk": 0.15,    # ML Risk Score
     }
 
+    # 6. Calcular efficiency_score (soma ponderada dos 5 pilares, SEM social_impact)
     efficiency = (
         cost_score * W["cost"]
         + deadline_score * W["deadline"]
         + quality_score * W["quality"]
         + recurrence_score * W["recurrence"]
-        + social_impact_score * W["social_impact"]
         + ml_risk_score * W["ml_risk"]
     )
+
+    # 7. Obter informações do agravante social para incluir no response
+    agravante_info = get_agravante_social_info(work)
 
     return ScoreResult(
         cost_score=round(cost_score, 2),
         deadline_score=round(deadline_score, 2),
         quality_score=round(quality_score, 2),
         recurrence_score=round(recurrence_score, 2),
-        social_impact_score=round(social_impact_score, 2),
+        social_impact_score=round(social_impact_score, 2),  # Mantido para exibir IDH no frontend
         efficiency_score=round(efficiency, 2),
         alerts=alerts,
         components={
@@ -704,11 +741,12 @@ def calculate_score(
             "deadline": deadline_details,
             "quality": quality_details,
             "recurrence": recurrence_details,
-            "social_impact": social_details,
+            "social_impact": social_details,  # Detalhes do IDH mantidos para o response
             "ml_risk": ml_details,
             "criticality_rule": {
                 "idh_threshold": CRITICAL_IDH_THRESHOLD,
                 "alert_multiplier": CRITICAL_IDH_MULTIPLIER,
             },
         },
+        agravante_social=agravante_info,
     )

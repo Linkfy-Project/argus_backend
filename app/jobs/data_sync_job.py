@@ -36,6 +36,7 @@ from app.etl.idh_sync import sync_idh
 from app.etl.overlap import calculate_territorial_overlaps
 from app.etl.sinapi_benchmark import apply_sinapi_benchmarks
 from app.etl.crea_proxy import sync_crea_proxy
+from app.etl.neighborhood_sync import sync_neighborhood_polygons, backfill_neighborhoods
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -336,7 +337,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         db_ai.close()
 
     # ── Step 7: Camadas geoespaciais ──
-    logger.info(f"[ARGUS JOB] ▶ Etapa 7/10: Sincronizando camadas geoespaciais...")
+    logger.info(f"[ARGUS JOB] ▶ Etapa 7/12: Sincronizando camadas geoespaciais...")
     try:
         geo_result = sync_geo_layers()
         result["steps"].append(
@@ -357,8 +358,30 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         )
         logger.info(f"[ARGUS JOB]   ✘ Camadas geoespaciais falharam: {exc}")
 
-    # ── Step 8: Geocodificação em batch (Google Maps) ──
-    logger.info(f"[ARGUS JOB] ▶ Etapa 8/10: Geocodificação em batch...")
+    # ── Step 8: Polígonos de bairros (OpenStreetMap) ──
+    logger.info(f"[ARGUS JOB] ▶ Etapa 8/12: Sincronizando polígonos de bairros...")
+    try:
+        neighborhood_poly_result = sync_neighborhood_polygons()
+        result["steps"].append(
+            {
+                "step": "sync_neighborhood_polygons",
+                "status": "ok",
+                "result": neighborhood_poly_result,
+            }
+        )
+        logger.info(f"[ARGUS JOB]   ✔ Polígonos de bairros: {neighborhood_poly_result}")
+    except Exception as exc:
+        result["steps"].append(
+            {
+                "step": "sync_neighborhood_polygons",
+                "status": "error",
+                "error": str(exc),
+            }
+        )
+        logger.info(f"[ARGUS JOB]   ✘ Polígonos de bairros falharam: {exc}")
+
+    # ── Step 9: Geocodificação em batch (Google Maps) ──
+    logger.info(f"[ARGUS JOB] ▶ Etapa 9/12: Geocodificação em batch...")
     db = SessionLocal()
     try:
         geo_stats = batch_geocode_works(db)
@@ -382,8 +405,33 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
     finally:
         db.close()
 
-    # ── Step 9: Sincronização de IDH por setor censitário ──
-    logger.info(f"[ARGUS JOB] ▶ Etapa 9/10: Sincronizando IDH por setor censitário...")
+    # ── Step 10: Backfill de neighborhoods (point-in-polygon + regex) ──
+    logger.info(f"[ARGUS JOB] ▶ Etapa 10/12: Preenchendo bairros das obras...")
+    db = SessionLocal()
+    try:
+        nb_stats = backfill_neighborhoods(db)
+        result["steps"].append(
+            {
+                "step": "backfill_neighborhoods",
+                "status": "ok",
+                "result": nb_stats,
+            }
+        )
+        logger.info(f"[ARGUS JOB]   ✔ Backfill de bairros concluído: {nb_stats}")
+    except Exception as exc:
+        result["steps"].append(
+            {
+                "step": "backfill_neighborhoods",
+                "status": "error",
+                "error": str(exc),
+            }
+        )
+        logger.info(f"[ARGUS JOB]   ✘ Backfill de bairros falhou: {exc}")
+    finally:
+        db.close()
+
+    # ── Step 11: Sincronização de IDH por setor censitário ──
+    logger.info(f"[ARGUS JOB] ▶ Etapa 11/12: Sincronizando IDH por setor censitário...")
     db = SessionLocal()
     try:
         idh_stats = sync_idh(db)
@@ -407,8 +455,8 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
     finally:
         db.close()
 
-    # ── Step 10: Sobreposição territorial (buffer por raio) ──
-    logger.info(f"[ARGUS JOB] ▶ Etapa 10/10: Calculando sobreposição territorial...")
+    # ── Step 12: Sobreposição territorial (buffer por raio) ──
+    logger.info(f"[ARGUS JOB] ▶ Etapa 12/12: Calculando sobreposição territorial...")
     db = SessionLocal()
     try:
         overlap_stats = calculate_territorial_overlaps(db)

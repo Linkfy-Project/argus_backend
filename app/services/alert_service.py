@@ -70,9 +70,14 @@ def _resolve_acao(code: str) -> str:
 def _alert_to_read(alert: Alert, work: PublicWork | None = None) -> AlertRead:
     """
     Converte um modelo Alert + PublicWork em AlertRead para a API.
-    Enriquece com dados derivados: tipo, nível, motivo, ação sugerida, etc.
+    Enriquece com dados derivados: tipo, nível, motivo, ação sugerida, agravante social, etc.
     """
     w = work or alert.work
+    
+    # Calcula se o agravante social está ativo baseado no IDH da obra
+    idh_val = float(w.idh) if w and w.idh is not None else None
+    agravante_social = idh_val is not None and idh_val < 0.600
+
     return AlertRead(
         id=alert.id,
         work_id=alert.work_id,
@@ -91,6 +96,7 @@ def _alert_to_read(alert: Alert, work: PublicWork | None = None) -> AlertRead:
         data_deteccao=alert.created_at,
         score_argus=w.efficiency_score if w else None,
         valor_contratado=w.contract_value if w else None,
+        agravante_social_ativo=agravante_social,
     )
 
 

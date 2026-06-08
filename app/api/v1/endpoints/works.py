@@ -11,6 +11,7 @@ router = APIRouter(prefix="/works", tags=["works"])
 
 @router.get("/scoring/rules")
 def scoring_rules():
+    """Retorna as regras de scoring atualizadas com os 5 pilares + agravante social."""
     return {
         "weights": WEIGHTS,
         "formulas": {
@@ -18,8 +19,15 @@ def scoring_rules():
             "deadline": "max(0, 100 - (Dias de Atraso / 90) * 100)",
             "quality": "max(0, 100 - ((Variacao de Aditivos % / 25) * 100) - Soma das Penalidades CREA)",
             "recurrence": "100 - percentual_de_area_sobreposta por Convex Hull em janela inferior a 24 meses; fallback por CNPJ quando geometria indisponivel",
-            "social_impact": "(1 - IDH Local) * 100",
-            "final_score": "sum(Nota da Dimensao * Peso da Dimensao)",
+            "ml_risk": "100 - (media das probabilidades de risco * 100)",
+            "final_score": "sum(Nota da Dimensao * Peso da Dimensao) — 5 pilares, IDH nao entra no somatorio",
+        },
+        "agravante_social": {
+            "description": "O IDH (Impacto Socioeconomico) atua como multiplicador de criticidade, NAO como pilar do score base.",
+            "idh_formula": "(1 - IDH Local) * 100",
+            "threshold": CRITICAL_IDH_THRESHOLD,
+            "multiplier": CRITICAL_IDH_MULTIPLIER,
+            "applies_to": "severity_weight dos alertas WARNING, ALERT e CRITICAL quando IDH < 0.600",
         },
         "crea_penalties": CREA_PENALTIES,
         "criticality_multiplier": {

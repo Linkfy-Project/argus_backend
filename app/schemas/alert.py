@@ -107,7 +107,11 @@ class AlertStatusUpdate(BaseModel):
 
 
 class AlertRead(BaseModel):
-    """Schema de resposta para alertas expostos pela API."""
+    """Schema de resposta para alertas expostos pela API.
+    
+    Inclui o campo agravante_social_ativo que indica se a obra associada
+    possui IDH inferior ao limiar (0.600), ativando o multiplicador de criticidade.
+    """
     id: int
     work_id: int
     tipo: str
@@ -125,5 +129,6 @@ class AlertRead(BaseModel):
     data_deteccao: datetime | None = None
     score_argus: float | None = None
     valor_contratado: float | None = None
+    agravante_social_ativo: bool = False
 
     model_config = ConfigDict(from_attributes=True)

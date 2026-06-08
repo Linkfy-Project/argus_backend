@@ -69,9 +69,14 @@ class WorkRead(WorkBase):
     model_config = ConfigDict(from_attributes=True)
 
 class ScoreDetails(BaseModel):
+    """Schema para detalhamento do score de uma obra.
+    
+    Inclui o agravante_social com informações sobre o IDH e multiplicador de criticidade.
+    """
     efficiency_score: float
     components: dict
     alerts: list[dict]
+    agravante_social: dict | None = None
 
 class ScoringRules(BaseModel):
     weights: dict
