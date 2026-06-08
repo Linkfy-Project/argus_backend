@@ -6,6 +6,14 @@ URL do backend(render): https://argus-backend-5bio.onrender.com
 
 Documentação do Render: https://argus-backend-5bio.onrender.com/docs#/
 
+## Pass de Qualidade — Entrega Final (v0.1.0)
+
+- **Logging estruturado**: `print("DEBUG: ...")` substituídos por `logger.info()` em todos os módulos ETL e serviços. Nível configurável via `LOG_LEVEL` (padrão: `INFO`).
+- **Lifespan moderno**: `@app.on_event("startup"/"shutdown")` substituído por `lifespan` context manager (FastAPI 0.115+).
+- **Variáveis de ambiente**: `.env.example` atualizado com `CREA_PROXY_ENABLED`, `INFLATION_ENABLED`, `INFLATION_BASE_YEAR`, `LOG_LEVEL`.
+- **Testes**: 17/17 passando, 0 warnings de deprecation.
+- **Compatibilidade Render**: `runtime.txt` (`python-3.11.9`), `requirements.txt` e CORS configurados.
+
 ## O que foi ajustado nesta versão
 
 - **APIs de Alertas, Contratos e Fornecedores** (NOVO):

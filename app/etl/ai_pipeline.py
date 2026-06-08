@@ -27,12 +27,15 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.work import ModelCache, PublicWork
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def _load_system_prompt() -> str:
     """Carrega o prompt de sistema do arquivo system_prompt.txt na raiz do backend."""
     prompt_path = Path(__file__).resolve().parent.parent.parent / "system_prompt.txt"
-    print(f"DEBUG: [AI PIPELINE] Carregando system prompt de: {prompt_path}")
+    logger.info(f"[AI PIPELINE] Carregando system prompt de: {prompt_path}")
     if not prompt_path.exists():
         raise FileNotFoundError(
             f"Arquivo system_prompt.txt não encontrado em: {prompt_path}"
@@ -57,7 +60,7 @@ def backfill_description_hashes(db: Session) -> dict:
     Returns:
         Dicionário com estatísticas do backfill.
     """
-    print(f"DEBUG: [AI PIPELINE] ▶ Backfill de description_hash em public_works...")
+    logger.info(f"[AI PIPELINE] ▶ Backfill de description_hash em public_works...")
 
     # Busca registros sem hash
     rows = db.execute(
@@ -70,10 +73,10 @@ def backfill_description_hashes(db: Session) -> dict:
     ).fetchall()
 
     total = len(rows)
-    print(f"DEBUG: [AI PIPELINE]   Registros sem hash: {total}")
+    logger.info(f"[AI PIPELINE]   Registros sem hash: {total}")
 
     if total == 0:
-        print(f"DEBUG: [AI PIPELINE]   ✔ Todos os registros já possuem hash")
+        logger.info(f"[AI PIPELINE]   ✔ Todos os registros já possuem hash")
         return {"status": "ok", "updated": 0}
 
     updated = 0
@@ -88,7 +91,7 @@ def backfill_description_hashes(db: Session) -> dict:
         updated += 1
 
     db.commit()
-    print(f"DEBUG: [AI PIPELINE]   ✔ Hashes atualizados: {updated}/{total}")
+    logger.info(f"[AI PIPELINE]   ✔ Hashes atualizados: {updated}/{total}")
     return {"status": "ok", "updated": updated}
 
 
@@ -263,18 +266,18 @@ def run_ai_pipeline(db: Session) -> dict:
     settings = get_settings()
     started_at = datetime.now()
 
-    print(f"DEBUG: [AI PIPELINE] ===============================================")
-    print(f"DEBUG: [AI PIPELINE] INICIANDO PIPELINE DE IA")
-    print(f"DEBUG: [AI PIPELINE]   Modelo:     {settings.OPENROUTER_MODEL_ID}")
-    print(f"DEBUG: [AI PIPELINE]   Provider:   {settings.OPENROUTER_PROVIDER}")
-    print(f"DEBUG: [AI PIPELINE]   Workers:    {settings.AI_PIPELINE_MAX_WORKERS}")
-    print(f"DEBUG: [AI PIPELINE]   Timeout:    {settings.AI_PIPELINE_TIMEOUT}s")
-    print(f"DEBUG: [AI PIPELINE]   Início:     {started_at.isoformat()}")
-    print(f"DEBUG: [AI PIPELINE] ===============================================")
+    logger.info(f"[AI PIPELINE] ===============================================")
+    logger.info(f"[AI PIPELINE] INICIANDO PIPELINE DE IA")
+    logger.info(f"[AI PIPELINE]   Modelo:     {settings.OPENROUTER_MODEL_ID}")
+    logger.info(f"[AI PIPELINE]   Provider:   {settings.OPENROUTER_PROVIDER}")
+    logger.info(f"[AI PIPELINE]   Workers:    {settings.AI_PIPELINE_MAX_WORKERS}")
+    logger.info(f"[AI PIPELINE]   Timeout:    {settings.AI_PIPELINE_TIMEOUT}s")
+    logger.info(f"[AI PIPELINE]   Início:     {started_at.isoformat()}")
+    logger.info(f"[AI PIPELINE] ===============================================")
 
     # Verifica se a chave de API está configurada
     if not settings.OPENROUTER_API_KEY:
-        print(f"DEBUG: [AI PIPELINE] ⚠ OPENROUTER_API_KEY não configurada. Pulando pipeline.")
+        logger.info(f"[AI PIPELINE] ⚠ OPENROUTER_API_KEY não configurada. Pulando pipeline.")
         return {
             "status": "skipped",
             "reason": "OPENROUTER_API_KEY não configurada",
@@ -284,9 +287,9 @@ def run_ai_pipeline(db: Session) -> dict:
     # Carrega o system prompt
     try:
         system_prompt = _load_system_prompt()
-        print(f"DEBUG: [AI PIPELINE] ✔ System prompt carregado ({len(system_prompt)} caracteres)")
+        logger.info(f"[AI PIPELINE] ✔ System prompt carregado ({len(system_prompt)} caracteres)")
     except FileNotFoundError as exc:
-        print(f"DEBUG: [AI PIPELINE] ✘ Erro ao carregar system prompt: {exc}")
+        logger.info(f"[AI PIPELINE] ✘ Erro ao carregar system prompt: {exc}")
         return {
             "status": "error",
             "error": str(exc),
@@ -295,7 +298,7 @@ def run_ai_pipeline(db: Session) -> dict:
 
     # Busca descrições distintas de public_works que ainda não foram processadas
     # Primeiro, busca todos os registros que não têm description_hash
-    print(f"DEBUG: [AI PIPELINE] ▶ Buscando descrições não processadas...")
+    logger.info(f"[AI PIPELINE] ▶ Buscando descrições não processadas...")
 
     # Busca descrições distintas que não estão no model_cache
     query = text("""
@@ -322,12 +325,12 @@ def run_ai_pipeline(db: Session) -> dict:
         )
 
     total_to_process = len(descriptions)
-    print(f"DEBUG: [AI PIPELINE]   Total de descrições para processar: {total_to_process}")
+    logger.info(f"[AI PIPELINE]   Total de descrições para processar: {total_to_process}")
 
     if total_to_process == 0:
         # Verifica quantas já estão no cache
         cached_count = db.execute(text("SELECT COUNT(*) FROM model_cache")).scalar()
-        print(f"DEBUG: [AI PIPELINE] ✔ Todas as descrições já estão no cache ({cached_count} entradas)")
+        logger.info(f"[AI PIPELINE] ✔ Todas as descrições já estão no cache ({cached_count} entradas)")
         finished_at = datetime.now()
         duration = (finished_at - started_at).total_seconds()
         return {
@@ -354,8 +357,8 @@ def run_ai_pipeline(db: Session) -> dict:
     cached_count = 0
     results_to_save = []
 
-    print(f"DEBUG: [AI PIPELINE] ▶ Processando {total_to_process} descrições com {settings.AI_PIPELINE_MAX_WORKERS} workers...")
-    print(f"DEBUG: [AI PIPELINE] ─────────────────────────────────────────────")
+    logger.info(f"[AI PIPELINE] ▶ Processando {total_to_process} descrições com {settings.AI_PIPELINE_MAX_WORKERS} workers...")
+    logger.info(f"[AI PIPELINE] ─────────────────────────────────────────────")
 
     with ThreadPoolExecutor(max_workers=settings.AI_PIPELINE_MAX_WORKERS) as executor:
         # Submete todas as tarefas
@@ -421,8 +424,8 @@ def run_ai_pipeline(db: Session) -> dict:
                 )
 
     # Salva todos os resultados no model_cache
-    print(f"DEBUG: [AI PIPELINE] ─────────────────────────────────────────────")
-    print(f"DEBUG: [AI PIPELINE] ▶ Salvando {len(results_to_save)} resultados no model_cache...")
+    logger.info(f"[AI PIPELINE] ─────────────────────────────────────────────")
+    logger.info(f"[AI PIPELINE] ▶ Salvando {len(results_to_save)} resultados no model_cache...")
 
     saved_count = 0
     for result_data in results_to_save:
@@ -516,7 +519,7 @@ def run_ai_pipeline(db: Session) -> dict:
             )
 
     db.commit()
-    print(f"DEBUG: [AI PIPELINE]   ✔ Resultados salvos no model_cache: {saved_count}")
+    logger.info(f"[AI PIPELINE]   ✔ Resultados salvos no model_cache: {saved_count}")
 
     # Estatísticas finais
     finished_at = datetime.now()
@@ -534,16 +537,16 @@ def run_ai_pipeline(db: Session) -> dict:
         "finished_at": finished_at.isoformat(),
     }
 
-    print(f"DEBUG: [AI PIPELINE] ===============================================")
-    print(f"DEBUG: [AI PIPELINE] PIPELINE DE IA CONCLUÍDA")
-    print(f"DEBUG: [AI PIPELINE]   Status:         {stats['status']}")
-    print(f"DEBUG: [AI PIPELINE]   Total:          {stats['total_descriptions']}")
-    print(f"DEBUG: [AI PIPELINE]   Processados OK: {stats['processed']}")
-    print(f"DEBUG: [AI PIPELINE]   Erros:          {stats['errors']}")
-    print(f"DEBUG: [AI PIPELINE]   Salvos em cache: {stats['cached']}")
-    print(f"DEBUG: [AI PIPELINE]   Duração:        {duration:.2f}s")
+    logger.info(f"[AI PIPELINE] ===============================================")
+    logger.info(f"[AI PIPELINE] PIPELINE DE IA CONCLUÍDA")
+    logger.info(f"[AI PIPELINE]   Status:         {stats['status']}")
+    logger.info(f"[AI PIPELINE]   Total:          {stats['total_descriptions']}")
+    logger.info(f"[AI PIPELINE]   Processados OK: {stats['processed']}")
+    logger.info(f"[AI PIPELINE]   Erros:          {stats['errors']}")
+    logger.info(f"[AI PIPELINE]   Salvos em cache: {stats['cached']}")
+    logger.info(f"[AI PIPELINE]   Duração:        {duration:.2f}s")
     if processed_count > 0:
-        print(f"DEBUG: [AI PIPELINE]   Velocidade média: {processed_count / duration:.1f} desc/s")
-    print(f"DEBUG: [AI PIPELINE] ===============================================")
+        logger.info(f"[AI PIPELINE]   Velocidade média: {processed_count / duration:.1f} desc/s")
+    logger.info(f"[AI PIPELINE] ===============================================")
 
     return stats

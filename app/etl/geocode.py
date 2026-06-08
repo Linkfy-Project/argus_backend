@@ -30,6 +30,9 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.work import PublicWork
 from app.models.geo import GeoLayer
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -251,11 +254,11 @@ def _geocode_single_address(
 
                 elif status == "REQUEST_DENIED":
                     # Erro de configuração — não adianta tentar de novo
-                    print(f"DEBUG: [GEOCODE]     ✘ REQUEST_DENIED: {data.get('error_message', '')}")
+                    logger.info(f"[GEOCODE]     ✘ REQUEST_DENIED: {data.get('error_message', '')}")
                     return None
 
                 else:
-                    print(f"DEBUG: [GEOCODE]     ✘ Status inesperado: {status}")
+                    logger.info(f"[GEOCODE]     ✘ Status inesperado: {status}")
                     return None
 
             else:
@@ -268,15 +271,15 @@ def _geocode_single_address(
                 time.sleep(tempo_espera)
 
         except httpx.TimeoutException:
-            print(f"DEBUG: [GEOCODE]     Timeout na tentativa {tentativa}/{MAX_RETRIES}")
+            logger.info(f"[GEOCODE]     Timeout na tentativa {tentativa}/{MAX_RETRIES}")
             time.sleep(2 ** tentativa)
 
         except Exception as exc:
-            print(f"DEBUG: [GEOCODE]     Erro inesperado: {exc}")
+            logger.info(f"[GEOCODE]     Erro inesperado: {exc}")
             time.sleep(2 ** tentativa)
 
     # Esgotou todas as tentativas
-    print(f"DEBUG: [GEOCODE]     ✘ Falha após {MAX_RETRIES} tentativas para: {address[:80]}")
+    logger.info(f"[GEOCODE]     ✘ Falha após {MAX_RETRIES} tentativas para: {address[:80]}")
     return None
 
 
@@ -305,7 +308,7 @@ def _geocode_addresses(
         for i, addr in enumerate(addresses, start=1):
             # Log de progresso a cada 10 endereços
             if i % 10 == 0 or i == 1:
-                print(f"DEBUG: [GEOCODE]     Geocodificando {i}/{total}: {addr[:60]}...")
+                logger.info(f"[GEOCODE]     Geocodificando {i}/{total}: {addr[:60]}...")
 
             result = _geocode_single_address(addr, api_key, client)
             if result:
@@ -357,13 +360,13 @@ def batch_geocode_works(db: Session) -> dict:
         "api_errors": 0,
     }
 
-    print(f"DEBUG: [GEOCODE] ===============================================")
-    print(f"DEBUG: [GEOCODE] INICIANDO GEOCODIFICAÇÃO EM BATCH (Google Maps)")
-    print(f"DEBUG: [GEOCODE] ===============================================")
+    logger.info(f"[GEOCODE] ===============================================")
+    logger.info(f"[GEOCODE] INICIANDO GEOCODIFICAÇÃO EM BATCH (Google Maps)")
+    logger.info(f"[GEOCODE] ===============================================")
 
     # ── ETAPA 0: Copia coordenadas já cacheadas de model_cache → public_works ──
     # Isso evita retrabalho quando public_works é resetada mas model_cache persiste.
-    print(f"DEBUG: [GEOCODE] ▶ Etapa 0: Restaurando coordenadas do cache...")
+    logger.info(f"[GEOCODE] ▶ Etapa 0: Restaurando coordenadas do cache...")
     cached_restore = text("""
         UPDATE public_works
         SET latitude = mc.latitude,
@@ -404,17 +407,17 @@ def batch_geocode_works(db: Session) -> dict:
     result = db.execute(cached_restore)
     stats["cached_restored"] = result.rowcount
     db.commit()
-    print(f"DEBUG: [GEOCODE]   ✔ Restauradas do cache: {stats['cached_restored']}")
+    logger.info(f"[GEOCODE]   ✔ Restauradas do cache: {stats['cached_restored']}")
 
     # Verifica se a chave de API está configurada
     api_key = settings.GOOGLE_MAPS_API_KEY
     if not api_key:
-        print(f"DEBUG: [GEOCODE] ⚠ GOOGLE_MAPS_API_KEY não configurada.")
+        logger.info(f"[GEOCODE] ⚠ GOOGLE_MAPS_API_KEY não configurada.")
         if settings.GEOCODE_FALLBACK_RANDOM:
-            print(f"DEBUG: [GEOCODE]   Usando fallback aleatório para obras restantes.")
+            logger.info(f"[GEOCODE]   Usando fallback aleatório para obras restantes.")
             return _fallback_all_random(db, stats)
         else:
-            print(f"DEBUG: [GEOCODE]   Fallback desligado. Apenas cache foi restaurado.")
+            logger.info(f"[GEOCODE]   Fallback desligado. Apenas cache foi restaurado.")
             return stats
 
     # ── ETAPA 1: Busca obras que AINDA não têm coordenadas (nem no cache) ──
@@ -450,10 +453,10 @@ def batch_geocode_works(db: Session) -> dict:
 
     stats["total_works"] = len(rows)
 
-    print(f"DEBUG: [GEOCODE]   Obras sem coordenadas (nem no cache): {stats['total_works']}")
+    logger.info(f"[GEOCODE]   Obras sem coordenadas (nem no cache): {stats['total_works']}")
 
     if stats["total_works"] == 0:
-        print(f"DEBUG: [GEOCODE]   ✔ Todas as obras já possuem coordenadas (via cache ou API).")
+        logger.info(f"[GEOCODE]   ✔ Todas as obras já possuem coordenadas (via cache ou API).")
         return stats
 
     # ── ETAPA 2: Monta endereços para cada obra ──
@@ -482,11 +485,11 @@ def batch_geocode_works(db: Session) -> dict:
             stats["skipped_no_address"] += 1
 
     stats["addressed"] = len(work_addresses)
-    print(f"DEBUG: [GEOCODE]   Endereços montados: {stats['addressed']}")
-    print(f"DEBUG: [GEOCODE]   Sem endereço possível: {stats['skipped_no_address']}")
+    logger.info(f"[GEOCODE]   Endereços montados: {stats['addressed']}")
+    logger.info(f"[GEOCODE]   Sem endereço possível: {stats['skipped_no_address']}")
 
     if stats["addressed"] == 0:
-        print(f"DEBUG: [GEOCODE]   Nenhum endereço para geocodificar.")
+        logger.info(f"[GEOCODE]   Nenhum endereço para geocodificar.")
         return stats
 
     # ── ETAPA 3: Deduplica endereços (múltiplas obras podem ter o mesmo endereço) ──
@@ -495,15 +498,15 @@ def batch_geocode_works(db: Session) -> dict:
     for addr, desc_hash in work_addresses.values():
         unique_addr_to_hash[addr] = desc_hash  # último hash vence (ok, mesmo endereço)
     unique_addresses = list(unique_addr_to_hash.keys())
-    print(f"DEBUG: [GEOCODE]   Endereços únicos: {len(unique_addresses)}")
+    logger.info(f"[GEOCODE]   Endereços únicos: {len(unique_addresses)}")
 
     # ── ETAPA 4: Geocodifica endereços individualmente via Google Maps API ──
     # Mapeamento global: endereço -> (lat, lon)
-    print(f"DEBUG: [GEOCODE]   ▶ Enviando {len(unique_addresses)} endereços para Google Maps API...")
+    logger.info(f"[GEOCODE]   ▶ Enviando {len(unique_addresses)} endereços para Google Maps API...")
     geocoded_map = _geocode_addresses(unique_addresses, api_key)
     found_api = len(geocoded_map)
     not_found_api = len(unique_addresses) - found_api
-    print(f"DEBUG: [GEOCODE]   ✔ Geocodificação concluída: {found_api} encontrados, {not_found_api} não encontrados")
+    logger.info(f"[GEOCODE]   ✔ Geocodificação concluída: {found_api} encontrados, {not_found_api} não encontrados")
 
     # ── ETAPA 5: Salva resultados no model_cache E em public_works ──
     polygon = _get_municipality_polygon(db)
@@ -587,16 +590,16 @@ def batch_geocode_works(db: Session) -> dict:
     db.commit()
 
     # ── ETAPA 6: Estatísticas finais ──
-    print(f"DEBUG: [GEOCODE] ===============================================")
-    print(f"DEBUG: [GEOCODE] GEOCODIFICAÇÃO CONCLUÍDA")
-    print(f"DEBUG: [GEOCODE]   Restauradas do cache:     {stats['cached_restored']}")
-    print(f"DEBUG: [GEOCODE]   Total de obras novas:     {stats['total_works']}")
-    print(f"DEBUG: [GEOCODE]   Com endereço montado:     {stats['addressed']}")
-    print(f"DEBUG: [GEOCODE]   Geocodificadas (API):     {stats['geocoded_api']}")
-    print(f"DEBUG: [GEOCODE]   Fallback (aleatório):     {stats['geocoded_fallback']}")
-    print(f"DEBUG: [GEOCODE]   Sem endereço possível:    {stats['skipped_no_address']}")
-    print(f"DEBUG: [GEOCODE]   Erros de API:             {stats['api_errors']}")
-    print(f"DEBUG: [GEOCODE] ===============================================")
+    logger.info(f"[GEOCODE] ===============================================")
+    logger.info(f"[GEOCODE] GEOCODIFICAÇÃO CONCLUÍDA")
+    logger.info(f"[GEOCODE]   Restauradas do cache:     {stats['cached_restored']}")
+    logger.info(f"[GEOCODE]   Total de obras novas:     {stats['total_works']}")
+    logger.info(f"[GEOCODE]   Com endereço montado:     {stats['addressed']}")
+    logger.info(f"[GEOCODE]   Geocodificadas (API):     {stats['geocoded_api']}")
+    logger.info(f"[GEOCODE]   Fallback (aleatório):     {stats['geocoded_fallback']}")
+    logger.info(f"[GEOCODE]   Sem endereço possível:    {stats['skipped_no_address']}")
+    logger.info(f"[GEOCODE]   Erros de API:             {stats['api_errors']}")
+    logger.info(f"[GEOCODE] ===============================================")
 
     return stats
 
@@ -614,7 +617,7 @@ def _fallback_all_random(db: Session, stats: dict) -> dict:
     Returns:
         dict de estatísticas atualizado.
     """
-    print(f"DEBUG: [GEOCODE] ▶ Modo fallback: coordenadas aleatórias...")
+    logger.info(f"[GEOCODE] ▶ Modo fallback: coordenadas aleatórias...")
 
     polygon = _get_municipality_polygon(db)
 
@@ -641,7 +644,7 @@ def _fallback_all_random(db: Session, stats: dict) -> dict:
     if stats["geocoded_fallback"] > 0:
         db.commit()
 
-    print(f"DEBUG: [GEOCODE]   ✔ Fallback concluído: {stats['geocoded_fallback']} obras")
+    logger.info(f"[GEOCODE]   ✔ Fallback concluído: {stats['geocoded_fallback']} obras")
     return stats
 
 
@@ -661,7 +664,7 @@ def assign_random_coordinates(db: Session) -> dict:
     Returns:
         dict com contadores no formato {"geocoded": int, "skipped": int}
     """
-    print(f"DEBUG: [GEOCODE] assign_random_coordinates() redirecionando para batch_geocode_works()...")
+    logger.info(f"[GEOCODE] assign_random_coordinates() redirecionando para batch_geocode_works()...")
     stats = batch_geocode_works(db)
 
     # Converte para o formato legado

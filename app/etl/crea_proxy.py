@@ -33,6 +33,9 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.work import PublicWork
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 # ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -92,18 +95,18 @@ def _carregar_obras_paralisadas_tcerj() -> pd.DataFrame:
     """
     for csv_path in TCERJ_CSV_PATHS:
         if csv_path.exists():
-            print(f"DEBUG: [CREA] Carregando obras paralisadas de: {csv_path}")
+            logger.info(f"[CREA] Carregando obras paralisadas de: {csv_path}")
             try:
                 df = pd.read_csv(csv_path, encoding="utf-8-sig", low_memory=False)
                 # Normaliza nomes de colunas (strip espaços)
                 df.columns = [str(c).strip() for c in df.columns]
-                print(f"DEBUG: [CREA]   ✔ {len(df)} registros carregados")
+                logger.info(f"[CREA]   ✔ {len(df)} registros carregados")
                 return df
             except Exception as exc:
-                print(f"DEBUG: [CREA]   ✘ Erro ao ler {csv_path}: {exc}")
+                logger.info(f"[CREA]   ✘ Erro ao ler {csv_path}: {exc}")
                 continue
 
-    print(f"DEBUG: [CREA]   ⚠ Nenhum CSV de obras paralisadas encontrado")
+    logger.info(f"[CREA]   ⚠ Nenhum CSV de obras paralisadas encontrado")
     return pd.DataFrame()
 
 
@@ -128,7 +131,7 @@ def _extrair_cnpjs_paralisados(df: pd.DataFrame) -> dict[str, int]:
             break
 
     if cnpj_col is None:
-        print(f"DEBUG: [CREA]   ⚠ Coluna de CNPJ não encontrada nas obras paralisadas. Colunas: {list(df.columns)}")
+        logger.info(f"[CREA]   ⚠ Coluna de CNPJ não encontrada nas obras paralisadas. Colunas: {list(df.columns)}")
         return {}
 
     # Conta obras por CNPJ
@@ -138,7 +141,7 @@ def _extrair_cnpjs_paralisados(df: pd.DataFrame) -> dict[str, int]:
         if cnpj and len(cnpj) == 14:  # CNPJ válido tem 14 dígitos
             contador[cnpj] += 1
 
-    print(f"DEBUG: [CREA]   CNPJs únicos nas obras paralisadas: {len(contador)}")
+    logger.info(f"[CREA]   CNPJs únicos nas obras paralisadas: {len(contador)}")
     return dict(contador)
 
 
@@ -172,14 +175,14 @@ def _consultar_ceis(cnpj: str, api_headers: dict) -> bool:
             # Se retornou lista não vazia, há sanções
             return isinstance(data, list) and len(data) > 0
 
-        print(f"DEBUG: [CREA]     CEIS retornou status {response.status_code} para CNPJ {cnpj}")
+        logger.info(f"[CREA]     CEIS retornou status {response.status_code} para CNPJ {cnpj}")
         return False
 
     except requests.exceptions.Timeout:
-        print(f"DEBUG: [CREA]     ⚠ Timeout ao consultar CEIS para CNPJ {cnpj}")
+        logger.info(f"[CREA]     ⚠ Timeout ao consultar CEIS para CNPJ {cnpj}")
         return False
     except Exception as exc:
-        print(f"DEBUG: [CREA]     ✘ Erro ao consultar CEIS para CNPJ {cnpj}: {exc}")
+        logger.info(f"[CREA]     ✘ Erro ao consultar CEIS para CNPJ {cnpj}: {exc}")
         return False
 
 
@@ -208,14 +211,14 @@ def _consultar_cnep(cnpj: str, api_headers: dict) -> bool:
             data = response.json()
             return isinstance(data, list) and len(data) > 0
 
-        print(f"DEBUG: [CREA]     CNEP retornou status {response.status_code} para CNPJ {cnpj}")
+        logger.info(f"[CREA]     CNEP retornou status {response.status_code} para CNPJ {cnpj}")
         return False
 
     except requests.exceptions.Timeout:
-        print(f"DEBUG: [CREA]     ⚠ Timeout ao consultar CNEP para CNPJ {cnpj}")
+        logger.info(f"[CREA]     ⚠ Timeout ao consultar CNEP para CNPJ {cnpj}")
         return False
     except Exception as exc:
-        print(f"DEBUG: [CREA]     ✘ Erro ao consultar CNEP para CNPJ {cnpj}: {exc}")
+        logger.info(f"[CREA]     ✘ Erro ao consultar CNEP para CNPJ {cnpj}: {exc}")
         return False
 
 
@@ -260,9 +263,9 @@ def sync_crea_proxy(db: Session) -> dict:
     settings = get_settings()
     started_at = time.time()
 
-    print(f"DEBUG: [CREA] ===============================================")
-    print(f"DEBUG: [CREA] INICIANDO SINCRONIZAÇÃO CREA PROXY")
-    print(f"DEBUG: [CREA] ===============================================")
+    logger.info(f"[CREA] ===============================================")
+    logger.info(f"[CREA] INICIANDO SINCRONIZAÇÃO CREA PROXY")
+    logger.info(f"[CREA] ===============================================")
 
     # Estatísticas de retorno
     stats = {
@@ -278,17 +281,17 @@ def sync_crea_proxy(db: Session) -> dict:
     }
 
     # ── 1. Carregar obras paralisadas do TCE-RJ ────────────────────────────
-    print(f"DEBUG: [CREA] ▶ Etapa 1: Carregando dados de obras paralisadas do TCE-RJ...")
+    logger.info(f"[CREA] ▶ Etapa 1: Carregando dados de obras paralisadas do TCE-RJ...")
     df_paralisadas = _carregar_obras_paralisadas_tcerj()
     cnpjs_paralisados = _extrair_cnpjs_paralisados(df_paralisadas)
 
     # ── 2. Carregar todas as obras do banco ────────────────────────────────
-    print(f"DEBUG: [CREA] ▶ Etapa 2: Carregando obras do banco de dados...")
+    logger.info(f"[CREA] ▶ Etapa 2: Carregando obras do banco de dados...")
     obras = db.query(PublicWork).all()
-    print(f"DEBUG: [CREA]   Total de obras no banco: {len(obras)}")
+    logger.info(f"[CREA]   Total de obras no banco: {len(obras)}")
 
     if not obras:
-        print(f"DEBUG: [CREA]   ⚠ Nenhuma obra no banco. Finalizando.")
+        logger.info(f"[CREA]   ⚠ Nenhuma obra no banco. Finalizando.")
         stats["duration_seconds"] = round(time.time() - started_at, 2)
         return stats
 
@@ -308,10 +311,10 @@ def sync_crea_proxy(db: Session) -> dict:
     cnpjs_para_consultar = cnpjs_ordenados[:max_cnpjs]
     cnpjs_excluidos = len(cnpjs_ordenados) - len(cnpjs_para_consultar)
 
-    print(f"DEBUG: [CREA]   CNPJs únicos encontrados: {len(cnpj_obras)}")
-    print(f"DEBUG: [CREA]   CNPJs a consultar na CGU: {len(cnpjs_para_consultar)} (limite: {max_cnpjs})")
+    logger.info(f"[CREA]   CNPJs únicos encontrados: {len(cnpj_obras)}")
+    logger.info(f"[CREA]   CNPJs a consultar na CGU: {len(cnpjs_para_consultar)} (limite: {max_cnpjs})")
     if cnpjs_excluidos > 0:
-        print(f"DEBUG: [CREA]   CNPJs excluídos pelo limite: {cnpjs_excluidos}")
+        logger.info(f"[CREA]   CNPJs excluídos pelo limite: {cnpjs_excluidos}")
 
     # ── 4. Consultar CEIS/CNEP na CGU ─────────────────────────────────────
     # Verifica se a chave de API da CGU está configurada.
@@ -321,25 +324,25 @@ def sync_crea_proxy(db: Session) -> dict:
     cnpjs_com_cnep: set[str] = set()
 
     if not cgu_api_key:
-        print(f"DEBUG: [CREA] ▶ Etapa 3: CGU_API_KEY não configurada — pulando consultas CEIS/CNEP.")
-        print(f"DEBUG: [CREA]   Cadastre-se em https://portaldatransparencia.gov.br/api-de-dados/cadastrar-email")
-        print(f"DEBUG: [CREA]   e adicione CGU_API_KEY=sua-chave no .env")
+        logger.info(f"[CREA] ▶ Etapa 3: CGU_API_KEY não configurada — pulando consultas CEIS/CNEP.")
+        logger.info(f"[CREA]   Cadastre-se em https://portaldatransparencia.gov.br/api-de-dados/cadastrar-email")
+        logger.info(f"[CREA]   e adicione CGU_API_KEY=sua-chave no .env")
     else:
         # Monta os headers com a chave de API da CGU
         # A API requer o header "chave-api-dados" com o token de acesso
         api_headers = {**HEADERS, "chave-api-dados": cgu_api_key}
 
-        print(f"DEBUG: [CREA] ▶ Etapa 3: Consultando CEIS/CNEP na CGU...")
-        print(f"DEBUG: [CREA]   URL base: {CGU_BASE_URL}")
+        logger.info(f"[CREA] ▶ Etapa 3: Consultando CEIS/CNEP na CGU...")
+        logger.info(f"[CREA]   URL base: {CGU_BASE_URL}")
 
         for i, cnpj in enumerate(cnpjs_para_consultar):
             if (i + 1) % 10 == 0 or i == 0:
-                print(f"DEBUG: [CREA]   Consultando CNPJ {i + 1}/{len(cnpjs_para_consultar)}: {cnpj}")
+                logger.info(f"[CREA]   Consultando CNPJ {i + 1}/{len(cnpjs_para_consultar)}: {cnpj}")
 
             # Consulta CEIS (impedimento)
             if _consultar_ceis(cnpj, api_headers):
                 cnpjs_com_ceis.add(cnpj)
-                print(f"DEBUG: [CREA]     ✔ CEIS: CNPJ {cnpj} TEM sanção ativa (impedimento)")
+                logger.info(f"[CREA]     ✔ CEIS: CNPJ {cnpj} TEM sanção ativa (impedimento)")
 
             # Rate limiting: 1 segundo entre requests
             time.sleep(1)
@@ -347,18 +350,18 @@ def sync_crea_proxy(db: Session) -> dict:
             # Consulta CNEP (inidôneo)
             if _consultar_cnep(cnpj, api_headers):
                 cnpjs_com_cnep.add(cnpj)
-                print(f"DEBUG: [CREA]     ✔ CNEP: CNPJ {cnpj} TEM sanção ativa (inidôneo)")
+                logger.info(f"[CREA]     ✔ CNEP: CNPJ {cnpj} TEM sanção ativa (inidôneo)")
 
             # Rate limiting: 1 segundo entre requests
             time.sleep(1)
 
             stats["cnpjs_consulted_cgu"] += 1
 
-        print(f"DEBUG: [CREA]   CEIS (impedidos): {len(cnpjs_com_ceis)} CNPJs")
-        print(f"DEBUG: [CREA]   CNEP (inidôneos): {len(cnpjs_com_cnep)} CNPJs")
+        logger.info(f"[CREA]   CEIS (impedidos): {len(cnpjs_com_ceis)} CNPJs")
+        logger.info(f"[CREA]   CNEP (inidôneos): {len(cnpjs_com_cnep)} CNPJs")
 
     # ── 5. Aplicar regras de classificação e atualizar obras ───────────────
-    print(f"DEBUG: [CREA] ▶ Etapa 4: Aplicando regras de classificação...")
+    logger.info(f"[CREA] ▶ Etapa 4: Aplicando regras de classificação...")
 
     for obra in obras:
         cnpj = _normalizar_cnpj(obra.contractor_document)
@@ -413,29 +416,29 @@ def sync_crea_proxy(db: Session) -> dict:
         stats["works_processed"] += 1
 
     # ── 6. Commit no banco ─────────────────────────────────────────────────
-    print(f"DEBUG: [CREA] ▶ Etapa 5: Salvando alterações no banco...")
+    logger.info(f"[CREA] ▶ Etapa 5: Salvando alterações no banco...")
     try:
         db.commit()
-        print(f"DEBUG: [CREA]   ✔ Commit realizado com sucesso")
+        logger.info(f"[CREA]   ✔ Commit realizado com sucesso")
     except Exception as exc:
         db.rollback()
-        print(f"DEBUG: [CREA]   ✘ Erro no commit: {exc}")
+        logger.info(f"[CREA]   ✘ Erro no commit: {exc}")
         stats["error"] = str(exc)
 
     # ── Finalização ────────────────────────────────────────────────────────
     stats["duration_seconds"] = round(time.time() - started_at, 2)
 
-    print(f"DEBUG: [CREA] ===============================================")
-    print(f"DEBUG: [CREA] SINCRONIZAÇÃO CREA PROXY CONCLUÍDA")
-    print(f"DEBUG: [CREA]   Obras processadas:     {stats['works_processed']}")
-    print(f"DEBUG: [CREA]   Obras atualizadas:     {stats['works_updated']}")
-    print(f"DEBUG: [CREA]   TCE-RJ paralisadas:    {stats['tcerj_paralyzed_matches']}")
-    print(f"DEBUG: [CREA]   CGU CEIS (impedidos):  {stats['cgu_ceis_matches']}")
-    print(f"DEBUG: [CREA]   CGU CNEP (inidôneos):  {stats['cgu_cnep_matches']}")
-    print(f"DEBUG: [CREA]   Keywords grave:        {stats['keyword_grave']}")
-    print(f"DEBUG: [CREA]   Keywords leve:         {stats['keyword_leve']}")
-    print(f"DEBUG: [CREA]   CNPJs consultados CGU: {stats['cnpjs_consulted_cgu']}")
-    print(f"DEBUG: [CREA]   Duração:               {stats['duration_seconds']}s")
-    print(f"DEBUG: [CREA] ===============================================")
+    logger.info(f"[CREA] ===============================================")
+    logger.info(f"[CREA] SINCRONIZAÇÃO CREA PROXY CONCLUÍDA")
+    logger.info(f"[CREA]   Obras processadas:     {stats['works_processed']}")
+    logger.info(f"[CREA]   Obras atualizadas:     {stats['works_updated']}")
+    logger.info(f"[CREA]   TCE-RJ paralisadas:    {stats['tcerj_paralyzed_matches']}")
+    logger.info(f"[CREA]   CGU CEIS (impedidos):  {stats['cgu_ceis_matches']}")
+    logger.info(f"[CREA]   CGU CNEP (inidôneos):  {stats['cgu_cnep_matches']}")
+    logger.info(f"[CREA]   Keywords grave:        {stats['keyword_grave']}")
+    logger.info(f"[CREA]   Keywords leve:         {stats['keyword_leve']}")
+    logger.info(f"[CREA]   CNPJs consultados CGU: {stats['cnpjs_consulted_cgu']}")
+    logger.info(f"[CREA]   Duração:               {stats['duration_seconds']}s")
+    logger.info(f"[CREA] ===============================================")
 
     return stats

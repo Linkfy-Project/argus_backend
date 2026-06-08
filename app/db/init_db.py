@@ -12,6 +12,9 @@ from sqlalchemy import inspect, text
 from app.db.session import Base, engine
 from app.models.work import Alert, PublicWork, ModelCache
 from app.models.geo import GeoLayer
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def _sql_type(column) -> str:
@@ -63,13 +66,13 @@ def _normalize_municipios_existing() -> None:
     """
     inspector = inspect(engine)
     if "public_works" not in inspector.get_table_names():
-        print("DEBUG: init_db - tabela public_works não existe, pulando migração de municípios")
+        logger.info("init_db - tabela public_works não existe, pulando migração de municípios")
         return
 
     # Verifica se a coluna municipio existe
     existing_cols = {col["name"] for col in inspector.get_columns("public_works")}
     if "municipio" not in existing_cols:
-        print("DEBUG: init_db - coluna municipio não existe, pulando migração de municípios")
+        logger.info("init_db - coluna municipio não existe, pulando migração de municípios")
         return
 
     # Variações conhecidas de "Macae" que devem ser normalizadas para "Macaé"
@@ -85,13 +88,13 @@ def _normalize_municipios_existing() -> None:
             ).scalar()
 
             if count_result and count_result > 0:
-                print(f"DEBUG: init_db - normalizando {count_result} registros com municipio='{variation}' -> 'Macaé'")
+                logger.info(f"init_db - normalizando {count_result} registros com municipio='{variation}' -> 'Macaé'")
                 conn.execute(
                     text("UPDATE public_works SET municipio = 'Macaé' WHERE LOWER(TRIM(municipio)) = :var"),
                     {"var": variation.lower().strip()},
                 )
 
-    print("DEBUG: init_db - migração de normalização de municípios concluída")
+    logger.info("init_db - migração de normalização de municípios concluída")
 
 
 def init_db() -> None:

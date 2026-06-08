@@ -25,6 +25,9 @@ warnings.filterwarnings("ignore", message="Parsing dates in.*dayfirst.*")
 from app.models.work import PublicWork
 from app.services.work_service import recompute_many
 from app.utils.parsing import first_present
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # ──────────────────────────────────────────────
@@ -407,7 +410,7 @@ def normalize_municipio_name(raw: str | None, default: str = "Macae") -> str:
         Nome do município normalizado no formato canônico (ex: "Macaé").
     """
     if not raw:
-        print(f"DEBUG: normalize_municipio_name - valor vazio, usando default='{default}'")
+        logger.info(f"normalize_municipio_name - valor vazio, usando default='{default}'")
         return default
 
     # Remove acentos para comparação
@@ -418,12 +421,12 @@ def normalize_municipio_name(raw: str | None, default: str = "Macae") -> str:
     # Tenta encontrar no mapeamento canônico
     canonical = _CANONICAL_MUNICIPIOS.get(cleaned)
     if canonical:
-        print(f"DEBUG: normalize_municipio_name - '{raw}' -> '{canonical}' (via mapeamento canônico)")
+        logger.info(f"normalize_municipio_name - '{raw}' -> '{canonical}' (via mapeamento canônico)")
         return canonical
 
     # Se não encontrou no mapeamento, retorna com title case
     result = raw.strip().title()
-    print(f"DEBUG: normalize_municipio_name - '{raw}' -> '{result}' (via title case)")
+    logger.info(f"normalize_municipio_name - '{raw}' -> '{result}' (via title case)")
     return result
 
 
@@ -991,13 +994,13 @@ def import_csv(
     if recompute:
         todos_ids = created_ids + updated_ids
         total_recompute = len(todos_ids)
-        print(f"DEBUG: [IMPORT] Recalculando scores de {total_recompute} obras em batch...")
+        logger.info(f"[IMPORT] Recalculando scores de {total_recompute} obras em batch...")
 
         try:
             result = recompute_many(db, todos_ids)
-            print(f"DEBUG: [IMPORT] Recompute batch concluído: {result['updated']} obras processadas.")
+            logger.info(f"[IMPORT] Recompute batch concluído: {result['updated']} obras processadas.")
         except Exception as exc:
-            print(f"DEBUG: [IMPORT]   Erro no recompute batch: {exc}")
+            logger.info(f"[IMPORT]   Erro no recompute batch: {exc}")
 
     return {
         "path": str(p),

@@ -15,6 +15,9 @@ Funções:
 import re
 from sqlalchemy.orm import Session
 from app.models.work import PublicWork
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 # ── Custos SINAPI de referência por tipo de obra (R$/m²) — RJ/Sudeste 2026 ──
 # Fonte: SINAPI/CEF/IBGE (valores de referência para obras públicas)
@@ -72,17 +75,17 @@ def classify_work_type(object_description: str) -> str:
         Se nenhum padrão for reconhecido, retorna "default".
     """
     if not object_description:
-        print("DEBUG: [SINAPI] Descrição vazia — usando tipo 'default'")
+        logger.info("[SINAPI] Descrição vazia — usando tipo 'default'")
         return "default"
 
     # Itera sobre os padrões regex na ordem definida
     for pattern, work_type in _TYPE_PATTERNS:
         if pattern.search(object_description):
-            print(f"DEBUG: [SINAPI] Descrição '{object_description[:80]}...' classificada como '{work_type}'")
+            logger.info(f"[SINAPI] Descrição '{object_description[:80]}...' classificada como '{work_type}'")
             return work_type
 
     # Nenhum padrão reconhecido — usa default
-    print(f"DEBUG: [SINAPI] Descrição '{object_description[:80]}...' não reconhecida — usando 'default'")
+    logger.info(f"[SINAPI] Descrição '{object_description[:80]}...' não reconhecida — usando 'default'")
     return "default"
 
 
@@ -105,13 +108,13 @@ def apply_sinapi_benchmarks(db: Session) -> dict:
         - skipped: obras já com benchmark preenchido (não sobrescreve)
         - classification: contagem por tipo classificado
     """
-    print("DEBUG: [SINAPI] ===============================================")
-    print("DEBUG: [SINAPI] Iniciando aplicação de benchmarks SINAPI...")
+    logger.info("[SINAPI] ===============================================")
+    logger.info("[SINAPI] Iniciando aplicação de benchmarks SINAPI...")
 
     # Busca todas as obras
     works: list[PublicWork] = db.query(PublicWork).all()
     total = len(works)
-    print(f"DEBUG: [SINAPI] Total de obras encontradas: {total}")
+    logger.info(f"[SINAPI] Total de obras encontradas: {total}")
 
     updated = 0
     skipped = 0
@@ -139,19 +142,19 @@ def apply_sinapi_benchmarks(db: Session) -> dict:
     # Commit das alterações
     if updated > 0:
         db.commit()
-        print(f"DEBUG: [SINAPI] Commit realizado: {updated} obras atualizadas")
+        logger.info(f"[SINAPI] Commit realizado: {updated} obras atualizadas")
     else:
-        print("DEBUG: [SINAPI] Nenhuma obra precisou ser atualizada")
+        logger.info("[SINAPI] Nenhuma obra precisou ser atualizada")
 
     # Log das estatísticas
-    print(f"DEBUG: [SINAPI] ── Estatísticas ──")
-    print(f"DEBUG: [SINAPI]   Total:      {total}")
-    print(f"DEBUG: [SINAPI]   Atualizadas: {updated}")
-    print(f"DEBUG: [SINAPI]   Puladas:     {skipped}")
-    print(f"DEBUG: [SINAPI]   Classificação por tipo:")
+    logger.info(f"[SINAPI] ── Estatísticas ──")
+    logger.info(f"[SINAPI]   Total:      {total}")
+    logger.info(f"[SINAPI]   Atualizadas: {updated}")
+    logger.info(f"[SINAPI]   Puladas:     {skipped}")
+    logger.info(f"[SINAPI]   Classificação por tipo:")
     for tipo, count in sorted(classification.items(), key=lambda x: -x[1]):
-        print(f"DEBUG: [SINAPI]     {tipo}: {count}")
-    print("DEBUG: [SINAPI] ===============================================")
+        logger.info(f"[SINAPI]     {tipo}: {count}")
+    logger.info("[SINAPI] ===============================================")
 
     return {
         "total": total,

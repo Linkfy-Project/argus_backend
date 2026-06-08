@@ -23,6 +23,9 @@ from shapely.geometry import Point
 from sqlalchemy.orm import Session
 
 from app.models.work import PublicWork
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Constante de conversão: 1 grau ≈ 111.000 metros (aproximação para WGS84)
 METERS_PER_DEGREE: float = 111_000.0
@@ -48,12 +51,12 @@ def calculate_territorial_overlaps(
     Returns:
         dict com estatísticas do processamento.
     """
-    print(f"DEBUG: [OVERLAY] ===============================================")
-    print(f"DEBUG: [OVERLAY] Iniciando cálculo de sobreposição territorial")
-    print(f"DEBUG: [OVERLAY]   Raio:     {radius_m}m")
-    print(f"DEBUG: [OVERLAY]   Janela:   {window_months} meses")
-    print(f"DEBUG: [OVERLAY]   Threshold: {EXPECTED_NEIGHBORS_THRESHOLD} obras esperadas")
-    print(f"DEBUG: [OVERLAY] ===============================================")
+    logger.info(f"[OVERLAY] ===============================================")
+    logger.info(f"[OVERLAY] Iniciando cálculo de sobreposição territorial")
+    logger.info(f"[OVERLAY]   Raio:     {radius_m}m")
+    logger.info(f"[OVERLAY]   Janela:   {window_months} meses")
+    logger.info(f"[OVERLAY]   Threshold: {EXPECTED_NEIGHBORS_THRESHOLD} obras esperadas")
+    logger.info(f"[OVERLAY] ===============================================")
 
     # ── 1. Buscar obras com coordenadas e data de assinatura ──
     works: list[PublicWork] = (
@@ -67,15 +70,15 @@ def calculate_territorial_overlaps(
     )
 
     total_works = len(works)
-    print(f"DEBUG: [OVERLAY] Obras com coordenadas e signed_at: {total_works}")
+    logger.info(f"[OVERLAY] Obras com coordenadas e signed_at: {total_works}")
 
     if total_works == 0:
-        print("DEBUG: [OVERLAY] Nenhuma obra encontrada. Retornando.")
+        logger.info("[OVERLAY] Nenhuma obra encontrada. Retornando.")
         return {"total_works": 0, "works_updated": 0, "status": "no_works"}
 
     # ── 2. Converter metros para graus (aproximação WGS84) ──
     radius_degrees: float = radius_m / METERS_PER_DEGREE
-    print(f"DEBUG: [OVERLAY] Raio em graus: {radius_degrees:.6f}")
+    logger.info(f"[OVERLAY] Raio em graus: {radius_degrees:.6f}")
 
     # ── 3. Definir janela temporal ──
     # Calcula a data limite: obras assinadas dentro dos últimos window_months meses
@@ -83,7 +86,7 @@ def calculate_territorial_overlaps(
     window_days: int = int(window_months * 30.44)
     today: date = date.today()
     window_start: date = today - timedelta(days=window_days)
-    print(f"DEBUG: [OVERLAY] Janela temporal: {window_start} até {today}")
+    logger.info(f"[OVERLAY] Janela temporal: {window_start} até {today}")
 
     # ── 4. Preparar dados para comparação eficiente ──
     # Cria uma lista de tuplas (id, lat, lon, signed_at, point) ordenada por latitude
@@ -97,7 +100,7 @@ def calculate_territorial_overlaps(
 
     # Ordena por latitude para permitir busca binária no bounding box
     work_data.sort(key=lambda x: x[1])  # ordena por lat
-    print(f"DEBUG: [OVERLAY] Dados preparados e ordenados por latitude.")
+    logger.info(f"[OVERLAY] Dados preparados e ordenados por latitude.")
 
     # ── 5. Calcular sobreposição para cada obra ──
     # Para cada obra, busca candidatos no bounding box (lat ± radius_degrees)
@@ -164,7 +167,7 @@ def calculate_territorial_overlaps(
     # ── 6. Commit das alterações ──
     if works_updated > 0:
         db.commit()
-        print(f"DEBUG: [OVERLAY] Commit realizado: {works_updated} obras atualizadas.")
+        logger.info(f"[OVERLAY] Commit realizado: {works_updated} obras atualizadas.")
 
     stats: dict = {
         "total_works": total_works,
@@ -174,11 +177,11 @@ def calculate_territorial_overlaps(
         "status": "ok",
     }
 
-    print(f"DEBUG: [OVERLAY] ===============================================")
-    print(f"DEBUG: [OVERLAY] Cálculo de sobreposição territorial concluído")
-    print(f"DEBUG: [OVERLAY]   Total de obras:   {total_works}")
-    print(f"DEBUG: [OVERLAY]   Obras atualizadas: {works_updated}")
-    print(f"DEBUG: [OVERLAY] ===============================================")
+    logger.info(f"[OVERLAY] ===============================================")
+    logger.info(f"[OVERLAY] Cálculo de sobreposição territorial concluído")
+    logger.info(f"[OVERLAY]   Total de obras:   {total_works}")
+    logger.info(f"[OVERLAY]   Obras atualizadas: {works_updated}")
+    logger.info(f"[OVERLAY] ===============================================")
 
     return stats
 

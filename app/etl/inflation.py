@@ -18,6 +18,9 @@ from datetime import date, datetime
 from typing import Optional
 
 import requests
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 # URL base da API do BCB para a série 433 (IPCA mensal)
 BCB_IPCA_URL = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.433/dados"
@@ -43,14 +46,14 @@ def fetch_ipca_series(start_date: str = "2018-01-01") -> dict[str, float]:
     Raises:
         requests.RequestException: Se a requisição à API falhar.
     """
-    print(f"DEBUG: [INFLATION] Buscando série IPCA a partir de {start_date}...")
+    logger.info(f"[INFLATION] Buscando série IPCA a partir de {start_date}...")
 
     # Converte a data inicial para o formato dd/MM/yyyy esperado pelo BCB
     try:
         dt = datetime.strptime(start_date, "%Y-%m-%d")
         data_inicial = dt.strftime(BCB_DATE_FORMAT)
     except ValueError:
-        print(f"DEBUG: [INFLATION] Formato de data inválido: {start_date}, usando 01/01/2018")
+        logger.info(f"[INFLATION] Formato de data inválido: {start_date}, usando 01/01/2018")
         data_inicial = "01/01/2018"
 
     params = {
@@ -58,12 +61,12 @@ def fetch_ipca_series(start_date: str = "2018-01-01") -> dict[str, float]:
         "dataInicial": data_inicial,
     }
 
-    print(f"DEBUG: [INFLATION] Requisitando BCB: {BCB_IPCA_URL} com params={params}")
+    logger.info(f"[INFLATION] Requisitando BCB: {BCB_IPCA_URL} com params={params}")
     response = requests.get(BCB_IPCA_URL, params=params, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
 
     dados = response.json()
-    print(f"DEBUG: [INFLATION] Recebidos {len(dados)} registros do BCB")
+    logger.info(f"[INFLATION] Recebidos {len(dados)} registros do BCB")
 
     # Monta o dicionário {data: variação_mensal}
     series: dict[str, float] = {}
@@ -74,10 +77,10 @@ def fetch_ipca_series(start_date: str = "2018-01-01") -> dict[str, float]:
             valor = float(valor_str.replace(",", "."))
             series[data_str] = valor
         except (ValueError, TypeError):
-            print(f"DEBUG: [INFLATION] Valor inválido para data {data_str}: {valor_str}")
+            logger.info(f"[INFLATION] Valor inválido para data {data_str}: {valor_str}")
             continue
 
-    print(f"DEBUG: [INFLATION] Série IPCA processada: {len(series)} meses")
+    logger.info(f"[INFLATION] Série IPCA processada: {len(series)} meses")
     return series
 
 
@@ -99,10 +102,10 @@ def build_ipca_index(series: dict[str, float]) -> dict[str, float]:
         As datas na resposta do BCB vêm no formato 'dd/MM/yyyy' (ex: '01/01/2018').
         Para ordenar corretamente, convertemos para datetime antes de ordenar.
     """
-    print("DEBUG: [INFLATION] Construindo índice acumulado do IPCA...")
+    logger.info("[INFLATION] Construindo índice acumulado do IPCA...")
 
     if not series:
-        print("DEBUG: [INFLATION] Série vazia — retornando índice vazio")
+        logger.info("[INFLATION] Série vazia — retornando índice vazio")
         return {}
 
     # Converte as chaves de data para datetime para ordenar cronologicamente
@@ -120,7 +123,7 @@ def build_ipca_index(series: dict[str, float]) -> dict[str, float]:
                     # Tenta formato yyyy-MM (ISO)
                     dt = datetime.strptime(data_str, "%Y-%m")
                 except ValueError:
-                    print(f"DEBUG: [INFLATION] Data não reconhecida: {data_str}")
+                    logger.info(f"[INFLATION] Data não reconhecida: {data_str}")
                     continue
         parsed_dates.append((dt, data_str, valor))
 
@@ -128,7 +131,7 @@ def build_ipca_index(series: dict[str, float]) -> dict[str, float]:
     parsed_dates.sort(key=lambda x: x[0])
 
     if not parsed_dates:
-        print("DEBUG: [INFLATION] Nenhuma data válida encontrada na série")
+        logger.info("[INFLATION] Nenhuma data válida encontrada na série")
         return {}
 
     # Constrói o índice acumulado
@@ -144,12 +147,12 @@ def build_ipca_index(series: dict[str, float]) -> dict[str, float]:
             current_index = current_index * (1.0 + variacao / 100.0)
         index[data_str] = current_index
 
-    print(f"DEBUG: [INFLATION] Índice acumulado: {len(index)} meses")
+    logger.info(f"[INFLATION] Índice acumulado: {len(index)} meses")
     if index:
         first_key = parsed_dates[0][1]
         last_key = parsed_dates[-1][1]
-        print(f"DEBUG: [INFLATION]   Primeiro mês: {first_key} = {index[first_key]:.4f}")
-        print(f"DEBUG: [INFLATION]   Último mês:   {last_key} = {index[last_key]:.4f}")
+        logger.info(f"[INFLATION]   Primeiro mês: {first_key} = {index[first_key]:.4f}")
+        logger.info(f"[INFLATION]   Último mês:   {last_key} = {index[last_key]:.4f}")
 
     return index
 
@@ -214,11 +217,11 @@ def correct_value(
     if target_date is None:
         target_date = date.today()
 
-    print(f"DEBUG: [INFLATION] Corrigindo R$ {value:,.2f} de {source_date} para {target_date}")
+    logger.info(f"[INFLATION] Corrigindo R$ {value:,.2f} de {source_date} para {target_date}")
 
     # Se as datas são iguais, não há correção a fazer
     if source_date == target_date:
-        print("DEBUG: [INFLATION] Datas iguais — sem correção necessária")
+        logger.info("[INFLATION] Datas iguais — sem correção necessária")
         return value
 
     try:
@@ -228,7 +231,7 @@ def correct_value(
         index = build_ipca_index(series)
 
         if not index:
-            print("DEBUG: [INFLATION] Índice vazio — retornando valor original")
+            logger.info("[INFLATION] Índice vazio — retornando valor original")
             return value
 
         # Busca os índices mais próximos das datas de origem e destino
@@ -236,26 +239,26 @@ def correct_value(
         target_index = _find_closest_index(index, target_date)
 
         if source_index is None or target_index is None:
-            print("DEBUG: [INFLATION] Índices não encontrados — retornando valor original")
+            logger.info("[INFLATION] Índices não encontrados — retornando valor original")
             return value
 
         if source_index <= 0:
-            print("DEBUG: [INFLATION] Índice de origem <= 0 — retornando valor original")
+            logger.info("[INFLATION] Índice de origem <= 0 — retornando valor original")
             return value
 
         # Calcula o valor corrigido
         correction_factor = target_index / source_index
         corrected_value = value * correction_factor
 
-        print(f"DEBUG: [INFLATION] Índice origem: {source_index:.4f}")
-        print(f"DEBUG: [INFLATION] Índice destino: {target_index:.4f}")
-        print(f"DEBUG: [INFLATION] Fator de correção: {correction_factor:.6f}")
-        print(f"DEBUG: [INFLATION] Valor corrigido: R$ {corrected_value:,.2f}")
+        logger.info(f"[INFLATION] Índice origem: {source_index:.4f}")
+        logger.info(f"[INFLATION] Índice destino: {target_index:.4f}")
+        logger.info(f"[INFLATION] Fator de correção: {correction_factor:.6f}")
+        logger.info(f"[INFLATION] Valor corrigido: R$ {corrected_value:,.2f}")
 
         return corrected_value
 
     except Exception as e:
-        print(f"DEBUG: [INFLATION] ERRO na correção: {e} — retornando valor original")
+        logger.info(f"[INFLATION] ERRO na correção: {e} — retornando valor original")
         return value
 
 
@@ -274,9 +277,9 @@ def _ensure_index_loaded() -> None:
     try:
         _series_cache = fetch_ipca_series()
         _index_cache = build_ipca_index(_series_cache)
-        print(f"DEBUG: [INFLATION] Cache carregado: {len(_index_cache)} índices")
+        logger.info(f"[INFLATION] Cache carregado: {len(_index_cache)} índices")
     except Exception as e:
-        print(f"DEBUG: [INFLATION] ERRO ao carregar cache: {e}")
+        logger.info(f"[INFLATION] ERRO ao carregar cache: {e}")
         _series_cache = {}
         _index_cache = {}
 
@@ -311,7 +314,7 @@ def correct_value_cached(
     _ensure_index_loaded()
 
     if not _index_cache:
-        print("DEBUG: [INFLATION] Cache vazio — retornando valor original")
+        logger.info("[INFLATION] Cache vazio — retornando valor original")
         return value
 
     # Busca os índices mais próximos
@@ -319,7 +322,7 @@ def correct_value_cached(
     target_index = _find_closest_index(_index_cache, target_date)
 
     if source_index is None or target_index is None:
-        print("DEBUG: [INFLATION] Índices não encontrados no cache — retornando valor original")
+        logger.info("[INFLATION] Índices não encontrados no cache — retornando valor original")
         return value
 
     if source_index <= 0:
@@ -329,8 +332,8 @@ def correct_value_cached(
     correction_factor = target_index / source_index
     corrected_value = value * correction_factor
 
-    print(f"DEBUG: [INFLATION] Cache hit — fator: {correction_factor:.6f}, "
-          f"corrigido: R$ {corrected_value:,.2f}")
+    logger.info(f"[INFLATION] Cache hit — fator: {correction_factor:.6f}, "
+                f"corrigido: R$ {corrected_value:,.2f}")
 
     return corrected_value
 
@@ -340,4 +343,4 @@ def invalidate_cache() -> None:
     global _series_cache, _index_cache
     _series_cache = None
     _index_cache = None
-    print("DEBUG: [INFLATION] Cache invalidado")
+    logger.info("[INFLATION] Cache invalidado")

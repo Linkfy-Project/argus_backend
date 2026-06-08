@@ -3,6 +3,9 @@ from pathlib import Path
 import joblib
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "ml" / "artifacts"
 ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
@@ -99,7 +102,7 @@ def get_cached_model():
     """Retorna o modelo em cache. Carrega do disco apenas na primeira chamada."""
     global _model_cache
     if _model_cache is None:
-        print("DEBUG: [ML] Carregando modelo pela primeira vez (cache).")
+        logger.info("[ML] Carregando modelo pela primeira vez (cache).")
         _model_cache = load_model()
     return _model_cache
 

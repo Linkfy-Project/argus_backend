@@ -1,19 +1,44 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
+from app.core.logging import get_logger, setup_logging
 from app.db.init_db import init_db
 from app.db.session import get_db
 from app.jobs.scheduler import start_scheduler, stop_scheduler
 
+setup_logging()
+logger = get_logger(__name__)
+
 settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifecycle manager que substitui os decorators deprecados
+    @app.on_event("startup") / @app.on_event("shutdown").
+    """
+    logger.info("ARGUS API iniciando — inicializando banco de dados...")
+    init_db()
+    logger.info("Banco inicializado — iniciando scheduler de sincronização...")
+    start_scheduler()
+    logger.info("ARGUS API pronta para receber requisições.")
+    yield
+    logger.info("ARGUS API encerrando — parando scheduler...")
+    stop_scheduler()
+    logger.info("ARGUS API encerrada com segurança.")
+
 
 app = FastAPI(
     title=settings.APP_NAME,
     description="Backend FastAPI da plataforma ARGUS para eficiência de obras públicas municipais.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -23,23 +48,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def startup():
-    """
-    Inicializa o banco e inicia o scheduler automático de sincronização.
-    """
-    init_db()
-    start_scheduler()
-
-
-@app.on_event("shutdown")
-def shutdown():
-    """
-    Encerra o scheduler com segurança quando a API for desligada.
-    """
-    stop_scheduler()
 
 
 @app.get("/health", tags=["health"])

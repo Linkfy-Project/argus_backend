@@ -36,6 +36,9 @@ from app.etl.idh_sync import sync_idh
 from app.etl.overlap import calculate_territorial_overlaps
 from app.etl.sinapi_benchmark import apply_sinapi_benchmarks
 from app.etl.crea_proxy import sync_crea_proxy
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> dict:
@@ -52,12 +55,12 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
 
     started_at = datetime.now()
 
-    print(f"DEBUG: [ARGUS JOB] ===============================================")
-    print(f"DEBUG: [ARGUS JOB] INICIANDO SINCRONIZAÇÃO")
-    print(f"DEBUG: [ARGUS JOB]   Município: {municipio}")
-    print(f"DEBUG: [ARGUS JOB]   Ano:       {ano or 'Todos'}")
-    print(f"DEBUG: [ARGUS JOB]   Início:    {started_at.isoformat()}")
-    print(f"DEBUG: [ARGUS JOB] ===============================================")
+    logger.info(f"[ARGUS JOB] ===============================================")
+    logger.info(f"[ARGUS JOB] INICIANDO SINCRONIZAÇÃO")
+    logger.info(f"[ARGUS JOB]   Município: {municipio}")
+    logger.info(f"[ARGUS JOB]   Ano:       {ano or 'Todos'}")
+    logger.info(f"[ARGUS JOB]   Início:    {started_at.isoformat()}")
+    logger.info(f"[ARGUS JOB] ===============================================")
 
     result = {
         "status": "started",
@@ -72,7 +75,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
     # pois o processamento da IA sempre deve ser reaproveitado.
     settings = get_settings()
     if settings.FORCE_RESET:
-        print(f"DEBUG: [ARGUS JOB] ▶ Etapa 0: FORCE_RESET=true — limpando TODAS as tabelas (exceto model_cache)...")
+        logger.info(f"[ARGUS JOB] ▶ Etapa 0: FORCE_RESET=true — limpando TODAS as tabelas (exceto model_cache)...")
         db_reset = SessionLocal()
         try:
             # Ordem respeita foreign keys: alerts depende de public_works
@@ -81,8 +84,8 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
             db_reset.execute(text("DELETE FROM public_works"))
             db_reset.execute(text("DELETE FROM geo_layers"))
             db_reset.commit()
-            print(f"DEBUG: [ARGUS JOB]   ✔ Tabelas limpas: alerts, public_works, geo_layers")
-            print(f"DEBUG: [ARGUS JOB]   ℹ model_cache PRESERVADA (nunca é resetada)")
+            logger.info(f"[ARGUS JOB]   ✔ Tabelas limpas: alerts, public_works, geo_layers")
+            logger.info(f"[ARGUS JOB]   ℹ model_cache PRESERVADA (nunca é resetada)")
             result["steps"].append(
                 {
                     "step": "force_reset",
@@ -92,7 +95,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
             )
         except Exception as exc:
             db_reset.rollback()
-            print(f"DEBUG: [ARGUS JOB]   ✘ Erro ao limpar tabelas: {exc}")
+            logger.info(f"[ARGUS JOB]   ✘ Erro ao limpar tabelas: {exc}")
             result["steps"].append(
                 {
                     "step": "force_reset",
@@ -103,10 +106,10 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         finally:
             db_reset.close()
     else:
-        print(f"DEBUG: [ARGUS JOB] FORCE_RESET=false — modo acumulativo (sem limpeza).")
+        logger.info(f"[ARGUS JOB] FORCE_RESET=false — modo acumulativo (sem limpeza).")
 
     # ── Step 1: Extração TCE-RJ ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 1/10: Extraindo dados do TCE-RJ...")
+    logger.info(f"[ARGUS JOB] ▶ Etapa 1/10: Extraindo dados do TCE-RJ...")
     try:
         tcerj_result = extract_tcerj(municipio=municipio, ano=ano)
         result["steps"].append(
@@ -116,7 +119,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "result": tcerj_result,
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✔ TCE-RJ concluído: {tcerj_result}")
+        logger.info(f"[ARGUS JOB]   ✔ TCE-RJ concluído: {tcerj_result}")
     except Exception as exc:
         result["steps"].append(
             {
@@ -125,10 +128,10 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "error": str(exc),
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✘ TCE-RJ falhou: {exc}")
+        logger.info(f"[ARGUS JOB]   ✘ TCE-RJ falhou: {exc}")
 
     # ── Step 2: Extração Portal de Macaé ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 2/10: Extraindo dados do Portal de Macaé...")
+    logger.info(f"[ARGUS JOB] ▶ Etapa 2/10: Extraindo dados do Portal de Macaé...")
     try:
         macae_result = update_macae_portal()
         result["steps"].append(
@@ -138,7 +141,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "result": macae_result,
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✔ Portal Macaé concluído: {macae_result}")
+        logger.info(f"[ARGUS JOB]   ✔ Portal Macaé concluído: {macae_result}")
     except Exception as exc:
         result["steps"].append(
             {
@@ -147,10 +150,10 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "error": str(exc),
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✘ Portal Macaé falhou: {exc}")
+        logger.info(f"[ARGUS JOB]   ✘ Portal Macaé falhou: {exc}")
 
     # ── Step 3: Importação de CSVs ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 3/10: Importando CSVs disponíveis...")
+    logger.info(f"[ARGUS JOB] ▶ Etapa 3/10: Importando CSVs disponíveis...")
 
     candidate_paths = [
         "data/raw/tcerj/obras_consolidado.csv",
@@ -174,7 +177,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         csv_path = Path(path)
 
         if not csv_path.exists():
-            print(f"DEBUG: [ARGUS JOB]     - CSV não encontrado, pulando: {csv_path}")
+            logger.info(f"[ARGUS JOB]     - CSV não encontrado, pulando: {csv_path}")
             result["steps"].append(
                 {
                     "step": "import_csv",
@@ -185,7 +188,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
             )
             continue
 
-        print(f"DEBUG: [ARGUS JOB]     - Importando: {csv_path}...")
+        logger.info(f"[ARGUS JOB]     - Importando: {csv_path}...")
         db = SessionLocal()
 
         try:
@@ -230,13 +233,13 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                     "error": str(exc),
                 }
             )
-            print(f"DEBUG: [ARGUS JOB]       ✘ Falha ao importar {csv_path}: {exc}")
+            logger.info(f"[ARGUS JOB]       ✘ Falha ao importar {csv_path}: {exc}")
 
         finally:
             db.close()
 
     # ── Step 4: Aplicar benchmarks SINAPI ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 4/10: Aplicando benchmarks SINAPI (custo/m² de referência)...")
+    logger.info(f"[ARGUS JOB] ▶ Etapa 4/10: Aplicando benchmarks SINAPI (custo/m² de referência)...")
     db_sinapi = SessionLocal()
     try:
         sinapi_result = apply_sinapi_benchmarks(db_sinapi)
@@ -247,7 +250,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "result": sinapi_result,
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✔ Benchmarks SINAPI concluídos: {sinapi_result}")
+        logger.info(f"[ARGUS JOB]   ✔ Benchmarks SINAPI concluídos: {sinapi_result}")
     except Exception as exc:
         result["steps"].append(
             {
@@ -256,14 +259,14 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "error": str(exc),
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✘ Benchmarks SINAPI falharam: {exc}")
+        logger.info(f"[ARGUS JOB]   ✘ Benchmarks SINAPI falharam: {exc}")
     finally:
         db_sinapi.close()
 
     # ── Step 5: Estimativa de infrações CREA via proxy (TCE-RJ + CGU) ──
     settings_crea = get_settings()
     if settings_crea.CREA_PROXY_ENABLED:
-        print(f"DEBUG: [ARGUS JOB] ▶ Etapa 5/10: Estimativa de infrações CREA via proxy...")
+        logger.info(f"[ARGUS JOB] ▶ Etapa 5/10: Estimativa de infrações CREA via proxy...")
         db_crea = SessionLocal()
         try:
             crea_result = sync_crea_proxy(db_crea)
@@ -274,7 +277,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                     "result": crea_result,
                 }
             )
-            print(f"DEBUG: [ARGUS JOB]   ✔ CREA proxy concluído: {crea_result}")
+            logger.info(f"[ARGUS JOB]   ✔ CREA proxy concluído: {crea_result}")
         except Exception as exc:
             result["steps"].append(
                 {
@@ -283,11 +286,11 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                     "error": str(exc),
                 }
             )
-            print(f"DEBUG: [ARGUS JOB]   ✘ CREA proxy falhou: {exc}")
+            logger.info(f"[ARGUS JOB]   ✘ CREA proxy falhou: {exc}")
         finally:
             db_crea.close()
     else:
-        print(f"DEBUG: [ARGUS JOB] ▶ Etapa 5/10: CREA proxy DESABILITADO (CREA_PROXY_ENABLED=false), pulando...")
+        logger.info(f"[ARGUS JOB] ▶ Etapa 5/10: CREA proxy DESABILITADO (CREA_PROXY_ENABLED=false), pulando...")
         result["steps"].append(
             {
                 "step": "crea_proxy",
@@ -297,7 +300,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
         )
 
     # ── Step 6: Backfill de hashes + Pipeline de IA (OpenRouter) ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 6/10: Backfill de hashes + Pipeline de IA...")
+    logger.info(f"[ARGUS JOB] ▶ Etapa 6/10: Backfill de hashes + Pipeline de IA...")
     db_ai = SessionLocal()
     try:
         # Primeiro, garante que todos os public_works tenham description_hash
@@ -319,7 +322,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "result": ai_result,
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✔ Pipeline de IA concluída: {ai_result}")
+        logger.info(f"[ARGUS JOB]   ✔ Pipeline de IA concluída: {ai_result}")
     except Exception as exc:
         result["steps"].append(
             {
@@ -328,12 +331,12 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "error": str(exc),
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✘ Pipeline de IA falhou: {exc}")
+        logger.info(f"[ARGUS JOB]   ✘ Pipeline de IA falhou: {exc}")
     finally:
         db_ai.close()
 
     # ── Step 7: Camadas geoespaciais ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 7/10: Sincronizando camadas geoespaciais...")
+    logger.info(f"[ARGUS JOB] ▶ Etapa 7/10: Sincronizando camadas geoespaciais...")
     try:
         geo_result = sync_geo_layers()
         result["steps"].append(
@@ -343,7 +346,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "result": geo_result,
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✔ Camadas geoespaciais concluídas: {geo_result}")
+        logger.info(f"[ARGUS JOB]   ✔ Camadas geoespaciais concluídas: {geo_result}")
     except Exception as exc:
         result["steps"].append(
             {
@@ -352,10 +355,10 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "error": str(exc),
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✘ Camadas geoespaciais falharam: {exc}")
+        logger.info(f"[ARGUS JOB]   ✘ Camadas geoespaciais falharam: {exc}")
 
     # ── Step 8: Geocodificação em batch (Google Maps) ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 8/10: Geocodificação em batch...")
+    logger.info(f"[ARGUS JOB] ▶ Etapa 8/10: Geocodificação em batch...")
     db = SessionLocal()
     try:
         geo_stats = batch_geocode_works(db)
@@ -366,7 +369,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "result": geo_stats,
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✔ Geocodificação concluída: {geo_stats}")
+        logger.info(f"[ARGUS JOB]   ✔ Geocodificação concluída: {geo_stats}")
     except Exception as exc:
         result["steps"].append(
             {
@@ -375,12 +378,12 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "error": str(exc),
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✘ Geocodificação falhou: {exc}")
+        logger.info(f"[ARGUS JOB]   ✘ Geocodificação falhou: {exc}")
     finally:
         db.close()
 
     # ── Step 9: Sincronização de IDH por setor censitário ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 9/10: Sincronizando IDH por setor censitário...")
+    logger.info(f"[ARGUS JOB] ▶ Etapa 9/10: Sincronizando IDH por setor censitário...")
     db = SessionLocal()
     try:
         idh_stats = sync_idh(db)
@@ -391,7 +394,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "result": idh_stats,
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✔ IDH sincronizado: {idh_stats}")
+        logger.info(f"[ARGUS JOB]   ✔ IDH sincronizado: {idh_stats}")
     except Exception as exc:
         result["steps"].append(
             {
@@ -400,12 +403,12 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "error": str(exc),
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✘ IDH falhou: {exc}")
+        logger.info(f"[ARGUS JOB]   ✘ IDH falhou: {exc}")
     finally:
         db.close()
 
     # ── Step 10: Sobreposição territorial (buffer por raio) ──
-    print(f"DEBUG: [ARGUS JOB] ▶ Etapa 10/10: Calculando sobreposição territorial...")
+    logger.info(f"[ARGUS JOB] ▶ Etapa 10/10: Calculando sobreposição territorial...")
     db = SessionLocal()
     try:
         overlap_stats = calculate_territorial_overlaps(db)
@@ -416,7 +419,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "result": overlap_stats,
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✔ Sobreposição territorial concluída: {overlap_stats}")
+        logger.info(f"[ARGUS JOB]   ✔ Sobreposição territorial concluída: {overlap_stats}")
     except Exception as exc:
         result["steps"].append(
             {
@@ -425,7 +428,7 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
                 "error": str(exc),
             }
         )
-        print(f"DEBUG: [ARGUS JOB]   ✘ Sobreposição territorial falhou: {exc}")
+        logger.info(f"[ARGUS JOB]   ✘ Sobreposição territorial falhou: {exc}")
     finally:
         db.close()
 
@@ -440,15 +443,15 @@ def sync_public_data_job(municipio: str = "Macae", ano: int | None = None) -> di
     result["total_skipped"] = total_skipped
     result["finished_at"] = finished_at.isoformat()
 
-    print(f"DEBUG: [ARGUS JOB] ===============================================")
-    print(f"DEBUG: [ARGUS JOB] SINCRONIZAÇÃO CONCLUÍDA")
-    print(f"DEBUG: [ARGUS JOB]   Status final:  {result['status']}")
-    print(f"DEBUG: [ARGUS JOB]   Duração:       {duration:.2f} segundos")
-    print(f"DEBUG: [ARGUS JOB]   Criados:       {total_created}")
-    print(f"DEBUG: [ARGUS JOB]   Atualizados:   {total_updated}")
-    print(f"DEBUG: [ARGUS JOB]   Erros:         {total_errors}")
-    print(f"DEBUG: [ARGUS JOB]   Pulados:       {total_skipped}")
-    print(f"DEBUG: [ARGUS JOB]   Finalizado:    {finished_at.isoformat()}")
-    print(f"DEBUG: [ARGUS JOB] ===============================================")
+    logger.info(f"[ARGUS JOB] ===============================================")
+    logger.info(f"[ARGUS JOB] SINCRONIZAÇÃO CONCLUÍDA")
+    logger.info(f"[ARGUS JOB]   Status final:  {result['status']}")
+    logger.info(f"[ARGUS JOB]   Duração:       {duration:.2f} segundos")
+    logger.info(f"[ARGUS JOB]   Criados:       {total_created}")
+    logger.info(f"[ARGUS JOB]   Atualizados:   {total_updated}")
+    logger.info(f"[ARGUS JOB]   Erros:         {total_errors}")
+    logger.info(f"[ARGUS JOB]   Pulados:       {total_skipped}")
+    logger.info(f"[ARGUS JOB]   Finalizado:    {finished_at.isoformat()}")
+    logger.info(f"[ARGUS JOB] ===============================================")
 
     return result
