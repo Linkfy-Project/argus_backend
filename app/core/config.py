@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     # Quando False (padrão), o sync só roda imediatamente se o banco
     # estiver vazio. Em produção, o UptimeRobot mantém o serviço acordado
     # e o sync roda a cada 15 dias normalmente.
-    SYNC_ON_COLD_START: bool = True
+    SYNC_ON_COLD_START: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
