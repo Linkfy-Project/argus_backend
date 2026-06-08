@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.db.session import get_db
 from app.models.work import PublicWork, Alert
+from app.utils.obra_filter import filter_obras_query
 
 import logging
 import unicodedata
@@ -66,6 +67,7 @@ def _normalize_municipio(raw: str) -> str:
 @router.get("/summary")
 def summary(municipio: str | None = None, db: Session = Depends(get_db)):
     q = db.query(PublicWork)
+    q = filter_obras_query(q)
     if municipio:
         # Usa unaccent() para remover acentos de AMBOS os lados da comparação
         # Exemplo: busca "macae" encontra "Macaé" no banco
@@ -84,15 +86,17 @@ def summary(municipio: str | None = None, db: Session = Depends(get_db)):
 
 @router.get("/rankings")
 def rankings(limit: int = 10, db: Session = Depends(get_db)):
-    worst = db.query(PublicWork).order_by(PublicWork.efficiency_score.asc().nullslast()).limit(limit).all()
-    best = db.query(PublicWork).order_by(PublicWork.efficiency_score.desc().nullslast()).limit(limit).all()
+    worst = filter_obras_query(db.query(PublicWork)).order_by(PublicWork.efficiency_score.asc().nullslast()).limit(limit).all()
+    best = filter_obras_query(db.query(PublicWork)).order_by(PublicWork.efficiency_score.desc().nullslast()).limit(limit).all()
     def pack(work: PublicWork):
         return {"id": work.id, "municipio": work.municipio, "object_description": work.object_description, "contractor_name": work.contractor_name, "efficiency_score": work.efficiency_score}
     return {"worst": [pack(w) for w in worst], "best": [pack(w) for w in best]}
 
 @router.get("/map/geojson")
 def geojson(db: Session = Depends(get_db)):
-    works = db.query(PublicWork).filter(PublicWork.latitude.isnot(None), PublicWork.longitude.isnot(None)).all()
+    q = db.query(PublicWork).filter(PublicWork.latitude.isnot(None), PublicWork.longitude.isnot(None))
+    q = filter_obras_query(q)
+    works = q.all()
     return {
         "type": "FeatureCollection",
         "features": [
@@ -115,6 +119,7 @@ def trends(municipio: str | None = None, db: Session = Depends(get_db)):
     from collections import defaultdict
 
     q = db.query(PublicWork)
+    q = filter_obras_query(q)
     if municipio:
         # Usa unaccent() para remover acentos de AMBOS os lados da comparação
         normalized = _normalize_filter_term(municipio)

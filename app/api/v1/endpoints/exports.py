@@ -5,6 +5,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.work import PublicWork
+from app.utils.obra_filter import filter_obras_query
 
 router = APIRouter(prefix="/exports", tags=["exports"])
 
@@ -12,7 +13,9 @@ FIELDS = ["id", "municipio", "object_description", "contractor_name", "contract_
 
 @router.get("/works.csv")
 def works_csv(db: Session = Depends(get_db)):
-    rows = db.query(PublicWork).all()
+    q = db.query(PublicWork)
+    q = filter_obras_query(q)
+    rows = q.all()
     df = pd.DataFrame([{field: getattr(w, field) for field in FIELDS} for w in rows])
     buffer = StringIO()
     df.to_csv(buffer, index=False)
@@ -21,7 +24,9 @@ def works_csv(db: Session = Depends(get_db)):
 
 @router.get("/works.xlsx")
 def works_xlsx(db: Session = Depends(get_db)):
-    rows = db.query(PublicWork).all()
+    q = db.query(PublicWork)
+    q = filter_obras_query(q)
+    rows = q.all()
     df = pd.DataFrame([{field: getattr(w, field) for field in FIELDS} for w in rows])
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:

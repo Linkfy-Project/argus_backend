@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.db.session import get_db
 from app.models.work import PublicWork, Alert
+from app.utils.obra_filter import filter_obras_query
 
 logger = logging.getLogger(__name__)
 
@@ -80,9 +81,11 @@ def report_executive(
     """
     mun = _normalize_municipio(municipio)
     works = (
-        db.query(PublicWork)
-        .options(joinedload(PublicWork.alerts))
-        .filter(func.lower(func.unaccent(PublicWork.municipio)).contains(mun))
+        filter_obras_query(
+            db.query(PublicWork)
+            .options(joinedload(PublicWork.alerts))
+            .filter(func.lower(func.unaccent(PublicWork.municipio)).contains(mun))
+        )
         .all()
     )
 
@@ -309,11 +312,13 @@ def report_critical_works(
     """Retorna obras com score crítico (<40) ou alto risco (40-59)."""
     mun = _normalize_municipio(municipio)
     works = (
-        db.query(PublicWork)
-        .options(joinedload(PublicWork.alerts))
-        .filter(func.lower(func.unaccent(PublicWork.municipio)).contains(mun))
-        .filter(PublicWork.efficiency_score.isnot(None))
-        .filter(PublicWork.efficiency_score < 60)
+        filter_obras_query(
+            db.query(PublicWork)
+            .options(joinedload(PublicWork.alerts))
+            .filter(func.lower(func.unaccent(PublicWork.municipio)).contains(mun))
+            .filter(PublicWork.efficiency_score.isnot(None))
+            .filter(PublicWork.efficiency_score < 60)
+        )
         .order_by(PublicWork.efficiency_score.asc())
         .limit(limit)
         .all()
@@ -357,9 +362,11 @@ def report_neighborhoods(
     """Análise consolidada de obras agrupadas por bairro."""
     mun = _normalize_municipio(municipio)
     works = (
-        db.query(PublicWork)
-        .options(joinedload(PublicWork.alerts))
-        .filter(func.lower(func.unaccent(PublicWork.municipio)).contains(mun))
+        filter_obras_query(
+            db.query(PublicWork)
+            .options(joinedload(PublicWork.alerts))
+            .filter(func.lower(func.unaccent(PublicWork.municipio)).contains(mun))
+        )
         .all()
     )
 
@@ -402,10 +409,12 @@ def report_suppliers(
     """Análise consolidada de fornecedores com indicadores de risco."""
     mun = _normalize_municipio(municipio)
     works = (
-        db.query(PublicWork)
-        .options(joinedload(PublicWork.alerts))
-        .filter(func.lower(func.unaccent(PublicWork.municipio)).contains(mun))
-        .filter(PublicWork.contractor_name.isnot(None))
+        filter_obras_query(
+            db.query(PublicWork)
+            .options(joinedload(PublicWork.alerts))
+            .filter(func.lower(func.unaccent(PublicWork.municipio)).contains(mun))
+            .filter(PublicWork.contractor_name.isnot(None))
+        )
         .all()
     )
 
@@ -463,9 +472,11 @@ def report_data_quality(
     """Relatório de qualidade dos dados: completude dos campos obrigatórios."""
     mun = _normalize_municipio(municipio)
     works = (
-        db.query(PublicWork)
-        .options(joinedload(PublicWork.alerts))
-        .filter(func.lower(func.unaccent(PublicWork.municipio)).contains(mun))
+        filter_obras_query(
+            db.query(PublicWork)
+            .options(joinedload(PublicWork.alerts))
+            .filter(func.lower(func.unaccent(PublicWork.municipio)).contains(mun))
+        )
         .all()
     )
 

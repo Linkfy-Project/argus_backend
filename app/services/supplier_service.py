@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
 
 from app.models.work import Alert, PublicWork
+from app.utils.obra_filter import filter_obras_query
 from app.schemas.supplier import SupplierRankingRead, SupplierDetailRead
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,9 @@ def _aggregate_suppliers(
     Retorna lista de dicionários com dados agregados por fornecedor.
     """
     q = db.query(PublicWork).options(joinedload(PublicWork.alerts))
+
+    # ── Filtro de obras (exclui registros classificados como não-obra) ──
+    q = filter_obras_query(q)
 
     # ── Filtros ──────────────────────────────────────────────
     if municipio:

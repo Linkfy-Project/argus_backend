@@ -45,13 +45,16 @@ def retrain_with_real_data(db: Session = Depends(get_db)):
     import joblib
     from app.models.work import PublicWork
     from app.services.scoring import delay_days, calculate_contractor_crea_totals
+    from app.utils.obra_filter import filter_obras_query
 
     MIN_SAMPLES = 50
 
     # Carrega obras com score calculado
     works = (
-        db.query(PublicWork)
-        .filter(PublicWork.efficiency_score.isnot(None))
+        filter_obras_query(
+            db.query(PublicWork)
+            .filter(PublicWork.efficiency_score.isnot(None))
+        )
         .all()
     )
 

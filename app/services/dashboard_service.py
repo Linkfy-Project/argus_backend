@@ -26,6 +26,7 @@ from sqlalchemy import func, case, literal_column
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.work import PublicWork, Alert
+from app.utils.obra_filter import filter_obras_query
 from app.schemas.dashboard import (
     DashboardSummary,
     PriorityQueueItem,
@@ -96,14 +97,17 @@ def _apply_municipio_filter(q, municipio: str | None):
     """
     Aplica filtro de município na query usando func.unaccent() para
     comparação insensível a acentos.
+    Também aplica filtro de obras (exclui registros classificados como não-obra).
 
     Args:
         q: Query SQLAlchemy.
         municipio: Nome do município para filtrar (opcional).
 
     Returns:
-        Query com filtro aplicado (ou sem alteração se municipio for None).
+        Query com filtros aplicados.
     """
+    # Aplica filtro para excluir registros classificados como não-obra (is_obra=0)
+    q = filter_obras_query(q)
     if municipio:
         normalized = _normalize_municipio(municipio)
         logger.debug("DEBUG: _apply_municipio_filter - filtro='%s' normalizado='%s'", municipio, normalized)

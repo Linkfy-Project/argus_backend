@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
 
 from app.models.work import Alert, PublicWork
+from app.utils.obra_filter import filter_obras_query
 from app.schemas.alert import (
     ALERT_CODE_TO_TIPO,
     ALERT_CODE_TO_MOTIVO,
@@ -108,12 +109,14 @@ def list_alerts(
     Lista alertas com filtros opcionais.
     Retorna lista de AlertRead enriquecidos com dados da obra associada.
     """
-    # Busca alertas com join na obra
+    # Busca alertas com join na obra, excluindo registros classificados como não-obra
     q = (
         db.query(Alert)
         .options(joinedload(Alert.work))
         .join(PublicWork, Alert.work_id == PublicWork.id)
     )
+    # Aplica filtro para excluir alertas de obras classificadas como não-obra
+    q = filter_obras_query(q)
 
     # ── Filtros ──────────────────────────────────────────────
     if municipio:

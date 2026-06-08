@@ -19,6 +19,7 @@ from app.models.work import PublicWork, Alert
 from app.schemas.work import WorkCreate
 from app.services.scoring import calculate_score, delay_days, calculate_contractor_crea_totals
 from app.services.ml_service import predict_risks
+from app.utils.obra_filter import filter_obras_query
 
 
 def _normalize_municipio_for_filter(raw: str) -> str:
@@ -59,6 +60,9 @@ def list_works(
 ):
     """Retorna (items, total) com paginação e filtros no banco de dados."""
     q = db.query(PublicWork).options(joinedload(PublicWork.alerts))
+
+    # ── Filtro de obras (exclui registros classificados como não-obra) ──
+    q = filter_obras_query(q)
 
     # ── Filtros ──────────────────────────────────────────────
     if municipio:
@@ -142,7 +146,10 @@ def list_works(
 
 
 def get_work(db: Session, work_id: int):
-    return db.query(PublicWork).options(joinedload(PublicWork.alerts)).filter(PublicWork.id == work_id).first()
+    """Retorna uma obra específica, excluindo registros classificados como não-obra."""
+    q = db.query(PublicWork).options(joinedload(PublicWork.alerts)).filter(PublicWork.id == work_id)
+    q = filter_obras_query(q)
+    return q.first()
 
 
 def create_work(db: Session, payload: WorkCreate):

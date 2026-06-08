@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, or_
 
 from app.models.work import Alert, PublicWork
+from app.utils.obra_filter import filter_obras_query
 from app.schemas.contract import ContractRead, ContractDetailRead
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,9 @@ def list_contracts(
     """
     q = db.query(PublicWork).options(joinedload(PublicWork.alerts))
 
+    # ── Filtro de obras (exclui registros classificados como não-obra) ──
+    q = filter_obras_query(q)
+
     today = date.today()
 
     # ── Filtros ──────────────────────────────────────────────
@@ -286,12 +290,14 @@ def get_contract(db: Session, contract_id: str | int) -> ContractDetailRead | No
         except (ValueError, TypeError):
             return None
 
-    work = (
+    # Busca obra excluindo registros classificados como não-obra
+    q = (
         db.query(PublicWork)
         .options(joinedload(PublicWork.alerts))
         .filter(PublicWork.id == work_id)
-        .first()
     )
+    q = filter_obras_query(q)
+    work = q.first()
     if not work:
         return None
 
